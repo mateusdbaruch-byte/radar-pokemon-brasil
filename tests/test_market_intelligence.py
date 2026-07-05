@@ -70,6 +70,14 @@ class TestAnalyzeCard:
         assert insight.demand_score_avg == 95.0
         assert insight.main_source == "Mercado Livre"
 
+    def test_price_reference_counts_as_sell(self):
+        results = [
+            _make_result("Mew", IntentType.PRICE_REFERENCE, 55, "mercado_livre", 80.0),
+        ]
+        insight = analyze_card("Mew", results)
+        assert insight.sell_signals == 1
+        assert insight.listing_count == 1
+
     def test_empty_results(self):
         insight = analyze_card("Mew", [])
         assert insight.recommendation == "dados insuficientes"
@@ -95,3 +103,12 @@ class TestAnalyzeAllCards:
         ]
         insights = analyze_all_cards(results)
         assert insights[0].card_name == "Charizard"
+
+    def test_includes_monitored_cards_without_data(self):
+        results = [_make_result("Pikachu", IntentType.BUY_INTENT, 90)]
+        insights = analyze_all_cards(results, monitored_cards=["Pikachu", "Mew"])
+        assert len(insights) == 2
+        assert insights[0].card_name == "Pikachu"
+        assert insights[1].card_name == "Mew"
+        assert insights[1].total_signals == 0
+        assert insights[1].recommendation == "dados insuficientes"

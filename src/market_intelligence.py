@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from src.models import IntentType, RadarResult
+from src.normalizer import normalize_card_name
 
 Recommendation = Literal[
     "observar",
@@ -120,7 +121,11 @@ def analyze_card(card_name: str, results: list[RadarResult]) -> CardMarketInsigh
 
     prices = [r.price for r in results if r.price is not None and r.price > 0]
     buy_results = [r for r in results if r.intent_type == IntentType.BUY_INTENT]
-    sell_results = [r for r in results if r.intent_type == IntentType.SELL_INTENT]
+    sell_results = [
+        r for r in results
+        if r.intent_type == IntentType.SELL_INTENT
+        or (r.intent_type == IntentType.PRICE_REFERENCE and r.source == "mercado_livre")
+    ]
     listings = [r for r in results if _is_listing(r)]
 
     source_counts = Counter(r.source for r in results)
@@ -155,20 +160,33 @@ def analyze_card(card_name: str, results: list[RadarResult]) -> CardMarketInsigh
     )
 
 
-def analyze_all_cards(results: list[RadarResult]) -> list[CardMarketInsight]:
-    """Agrupa resultados por carta e gera insights ordenados por demanda."""
+def analyze_all_cards(
+    results: list[RadarResult],
+    monitored_cards: list[str] | None = None,
+) -> list[CardMarketInsight]:
+    """
+    Agrupa resultados por carta e gera insights ordenados por demanda.
+
+    Se monitored_cards for informado, inclui cartas sem dados ao final.
+    """
     by_card: dict[str, list[RadarResult]] = {}
     for result in results:
         card = result.normalized_card_name
         by_card.setdefault(card, []).append(result)
 
-    insights = [analyze_card(card, card_results) for card, card_results in by_card.items()]
-    # Prioriza cartas com mais demanda e depois por score médio
-    insights.sort(
-        key=lambda i: (i.buy_signals, i.demand_score_avg, i.total_signals),
-        reverse=True,
-    )
-    return insights
+    if monitored_cards:
+        card_names = [normalize_card_name(c) for c in monitored_cards]
+    else:
+        card_names = list(by_card.keys())
+
+    insights = [analyze_card(card, by_card.get(card, [])) for card in card_names]
+
+    # Cartas com dados primeiro, ordenadas por demanda; depois sem dados
+    with_data = [i for i in insights if i.total_signals > 0]
+    without_data = [i for i in insights if i.total_signals == 0]
+    with_data.sort(key=lambda i: (i.buy_signals, i.demand_score_avg, i.total_signals), reverse=True)
+
+    return with_data + without_data
 
 
 def recommendation_style(recommendation: Recommendation) -> str:

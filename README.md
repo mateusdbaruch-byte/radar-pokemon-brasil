@@ -141,26 +141,44 @@ radar.bat search --mock --limit 5         # Windows
 python3 -m src report
 ```
 
-O relatório mostra **por carta**:
+O relatório é organizado em **4 camadas de inteligência** (não apenas uma lista de dados):
+
+#### 1. Resumo executivo
+Visão geral do mercado monitorado: quantas cartas têm dados, total de sinais de compra/venda, anúncios e qual carta tem maior demanda.
+
+#### 2. Destaques de mercado
+Painéis interpretativos das cartas mais relevantes, com frases como:
+> *"2 sinal(is) de compra (demanda média 93/100); 1 anúncio(s); preço médio R$ 149,90. Possível oportunidade — há demanda e anúncios ao mesmo tempo."*
+
+#### 3. Inteligência por carta
+Tabela consolidada com todas as cartas de `config/cards.yml`:
 
 | Métrica | Descrição |
 |---------|-----------|
-| Preço mín./máx./méd. | Com base nos anúncios com preço |
-| Anúncios | Quantidade de listagens encontradas |
-| Compra / Venda | Sinais de intenção de compra e venda |
-| Demanda | Score médio dos sinais de compra (0–100) |
-| Fonte | Principal origem dos dados |
-| Recomendação | Ver tabela abaixo |
+| **Preço mín.** | Menor preço encontrado nos anúncios |
+| **Preço máx.** | Maior preço encontrado |
+| **Preço méd.** | Média dos preços com valor |
+| **Anúncios** | Listagens no Mercado Livre e referências de preço |
+| **Compra** | Sinais com intenção de compra (`BUY_INTENT`) |
+| **Venda** | Sinais de venda e anúncios de marketplace |
+| **Demanda** | Score médio dos compradores (0–100); `—` se não houver |
+| **Fonte** | Principal origem dos dados (Reddit, Mercado Livre…) |
+| **Recomendação** | Leitura simples do cenário (ver abaixo) |
+
+Cartas sem dados aparecem com recomendação `dados insuficientes`.
+
+#### 4. Top sinais individuais
+Os posts/anúncios com maior score — detalhe complementar para análise manual.
 
 **Recomendações possíveis:**
 
 | Recomendação | Significado |
 |--------------|-------------|
-| `boa demanda` | Vários compradores, pouca oferta relativa |
-| `possível oportunidade` | Demanda e oferta coexistem |
-| `muita oferta` | Muitos anúncios, pouca demanda |
-| `observar` | Dados insuficientes para concluir |
-| `dados insuficientes` | Poucos sinais coletados |
+| `boa demanda` | Compradores ativos superam a oferta |
+| `possível oportunidade` | Demanda e oferta coexistem — pode haver negócio |
+| `muita oferta` | Muitos anúncios, pouca procura |
+| `observar` | Sinais mistos — colete mais dados |
+| `dados insuficientes` | Poucos sinais para concluir algo |
 
 ### Exportar CSV
 
@@ -205,7 +223,8 @@ radar-pokemon-brasil/
 │   └── sources.yml         # Fontes habilitadas
 ├── src/
 │   ├── main.py             # CLI
-│   ├── market_intelligence.py  # Análise por carta
+│   ├── market_intelligence.py  # Cálculo de métricas por carta
+│   ├── reporting.py        # Relatório visual no terminal
 │   ├── scoring.py          # Classificação de intenção
 │   └── connectors/         # Reddit, Mercado Livre, etc.
 ├── data/

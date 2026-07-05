@@ -10,8 +10,6 @@ import yaml
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.panel import Panel
-from rich.table import Table
 
 from src.connectors.discord_placeholder import DiscordPlaceholderConnector
 from src.connectors.mercado_livre import MercadoLivreConnector, get_mock_results as ml_mock
@@ -19,13 +17,9 @@ from src.connectors.reddit import RedditConnector, get_mock_results as reddit_mo
 from src.connectors.youtube import YouTubeConnector
 from src.database import count_results, fetch_all, save_results
 from src.exporters import export_to_csv
-from src.market_intelligence import (
-    analyze_all_cards,
-    recommendation_style,
-)
 from src.paths import DEFAULT_CARDS, DEFAULT_CSV, DEFAULT_DB, DEFAULT_SOURCES, PROJECT_ROOT
+from src.reporting import display_market_report
 
-# Carrega variáveis de ambiente do .env na raiz do projeto
 load_dotenv(PROJECT_ROOT / ".env")
 
 app = typer.Typer(
@@ -61,99 +55,6 @@ def load_cards(cards_path: Path) -> list[str]:
 def load_sources_config(sources_path: Path) -> dict:
     """Carrega configuração de fontes."""
     return load_yaml(sources_path).get("sources", {})
-
-
-def _format_price(value: float | None) -> str:
-    """Formata preço em reais ou retorna traço."""
-    if value is None:
-        return "—"
-    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
-def display_market_intelligence(results: list) -> None:
-    """Exibe visão de inteligência de mercado por carta."""
-    insights = analyze_all_cards(results)
-
-    if not insights:
-        console.print("[yellow]Nenhum dado para análise de mercado.[/yellow]")
-        return
-
-    console.print(
-        Panel(
-            "[bold]Visão de inteligência de mercado[/bold]\n"
-            "Resumo por carta com preços, sinais de demanda/oferta e recomendação.",
-            border_style="blue",
-        )
-    )
-
-    table = Table(show_lines=True, title="📈 Radar por Carta")
-    table.add_column("Carta", style="bold", width=12)
-    table.add_column("Preço mín.", justify="right", width=11)
-    table.add_column("Preço máx.", justify="right", width=11)
-    table.add_column("Preço méd.", justify="right", width=11)
-    table.add_column("Anúncios", justify="center", width=8)
-    table.add_column("Compra", justify="center", width=7)
-    table.add_column("Venda", justify="center", width=6)
-    table.add_column("Demanda", justify="center", width=8)
-    table.add_column("Fonte", width=14)
-    table.add_column("Recomendação", width=20)
-
-    for insight in insights:
-        demand_style = (
-            "green" if insight.demand_score_avg >= 70
-            else "yellow" if insight.demand_score_avg >= 40
-            else "dim"
-        )
-        rec_style = recommendation_style(insight.recommendation)
-        table.add_row(
-            insight.card_name,
-            _format_price(insight.min_price),
-            _format_price(insight.max_price),
-            _format_price(insight.avg_price),
-            str(insight.listing_count),
-            str(insight.buy_signals),
-            str(insight.sell_signals),
-            f"[{demand_style}]{insight.demand_score_avg:.0f}[/{demand_style}]",
-            insight.main_source,
-            f"[{rec_style}]{insight.recommendation}[/{rec_style}]",
-        )
-
-    console.print(table)
-    console.print()
-
-
-def display_top_signals(results: list, top_n: int = 10) -> None:
-    """Exibe os melhores sinais individuais por score."""
-    if not results:
-        return
-
-    sorted_results = sorted(results, key=lambda r: r.intent_score, reverse=True)[:top_n]
-
-    table = Table(show_lines=True, title="🎯 Melhores Sinais Individuais")
-    table.add_column("Score", width=6)
-    table.add_column("Intenção", width=16)
-    table.add_column("Carta", width=12)
-    table.add_column("Fonte", width=14)
-    table.add_column("Título / Trecho", width=42)
-    table.add_column("URL", width=28, overflow="fold")
-
-    for r in sorted_results:
-        score_style = (
-            "green" if r.intent_score >= 70
-            else "yellow" if r.intent_score >= 40
-            else "dim"
-        )
-        snippet = (r.title or r.text_snippet)[:60]
-        table.add_row(
-            f"[{score_style}]{r.intent_score}[/{score_style}]",
-            r.intent_type.value,
-            r.normalized_card_name,
-            r.source,
-            snippet,
-            r.url[:80],
-        )
-
-    console.print(table)
 
 
 @app.command()
@@ -270,14 +171,23 @@ def search(
     csv_path = export_to_csv(DEFAULT_CSV, DEFAULT_DB)
     console.print(f"[green]✓ CSV exportado para {csv_path}[/green]\n")
 
-    display_market_intelligence(all_results)
-    console.print()
-    display_top_signals(all_results, top_n=10)
+    display_market_report(console, all_results, monitored_cards=card_list, top_signals=5)
 
 
 @app.command()
 def report(
-    top: int = typer.Option(10, "--top", "-n", help="Melhores sinais individuais a exibir."),
+    cards: Path = typer.Option(
+        DEFAULT_CARDS,
+        "--cards",
+        "-c",
+        help="Arquivo YAML com cartas monitoradas (para incluir cartas sem dados).",
+    ),
+    top: int = typer.Option(
+        5,
+        "--top",
+        "-n",
+        help="Quantidade de sinais individuais no detalhe final.",
+    ),
 ) -> None:
     """Exibe relatório de inteligência de mercado dos resultados salvos."""
     if not DEFAULT_DB.exists():
@@ -290,29 +200,14 @@ def report(
         )
         raise typer.Exit(0)
 
-    stats = count_results(DEFAULT_DB)
     results = fetch_all(DEFAULT_DB)
-
-    if stats["total"] == 0:
+    if not results:
         console.print("[yellow]Banco vazio. Execute uma busca primeiro.[/yellow]")
         raise typer.Exit(0)
 
-    console.print("[bold blue]📊 Relatório — Radar Pokémon Brasil[/bold blue]\n")
-    console.print(f"Total de sinais coletados: [bold]{stats['total']}[/bold]")
-    console.print(f"Score médio geral: [bold]{stats['avg_score']}[/bold]\n")
-
-    summary = Table(show_header=False, box=None)
-    summary.add_column("Métrica")
-    summary.add_column("Valor", justify="right")
-    for intent, count in sorted(stats["by_intent"].items()):
-        summary.add_row(f"  {intent}", str(count))
-    console.print("[dim]Distribuição por intenção:[/dim]")
-    console.print(summary)
-    console.print()
-
-    display_market_intelligence(results)
-    console.print()
-    display_top_signals(results, top_n=top)
+    card_list = load_cards(cards)
+    console.print("[bold blue]📊 Relatório de Inteligência de Mercado — Radar Pokémon Brasil[/bold blue]\n")
+    display_market_report(console, results, monitored_cards=card_list, top_signals=top)
 
 
 @app.command(name="export")
