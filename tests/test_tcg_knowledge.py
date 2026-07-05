@@ -83,17 +83,18 @@ class TestClassifyText:
     def test_procuro_charizard_classify(self):
         result = classify_text(
             "Procuro Charizard 151 português NM, pago à vista",
-            card_hint="Charizard",
         )
         assert result.card_detected == "Charizard"
+        assert result.card_alias
+        assert result.card_confidence >= 90
         assert result.signals.collection == "151"
         assert result.intent_score >= 70
         assert "buyer" in result.probable_opportunity or result.signals.has_buy_intent
 
     def test_mew_psa_classify(self):
-        result = classify_text("Mew PSA 10", card_hint="Mew")
-        assert result.signals.grading
+        result = classify_text("Mew PSA 10")
         assert result.card_detected == "Mew"
+        assert result.signals.grading
 
 
 class TestEnrichOpportunity:

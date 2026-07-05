@@ -1,0 +1,78 @@
+cards:
+  Charizard:
+    aliases:
+      - Charizard
+      - Charizard ex
+      - Charizard GX
+      - Charizard V
+      - Charizard VMAX
+      - Zard
+      - Chariza
+
+  Umbreon:
+    aliases:
+      - Umbreon
+      - Umbreon ex
+      - Umbreon V
+      - Umbreon VMAX
+      - Moonbreon
+
+  Pikachu:
+    aliases:
+      - Pikachu
+      - Pikachu ex
+      - Pika
+
+  Mew:
+    aliases:
+      - Mew
+      - Mew ex
+
+  Mewtwo:
+    aliases:
+      - Mewtwo
+      - Mewtwo ex
+
+  Gengar:
+    aliases:
+      - Gengar
+      - Gengar ex
+      - Gengar VMAX
+
+  Lugia:
+    aliases:
+      - Lugia
+      - Lugia V
+      - Lugia VSTAR
+
+  Rayquaza:
+    aliases:
+      - Rayquaza
+      - Rayquaza V
+      - Rayquaza VMAX
+
+  Giratina:
+    aliases:
+      - Giratina
+      - Giratina V
+      - Giratina VSTAR
+
+  Greninja:
+    aliases:
+      - Greninja
+      - Greninja ex
+
+  Eevee:
+    aliases:
+      - Eevee
+      - Eevee ex
+
+  "Latias & Latios":
+    aliases:
+      - Latias & Latios GX
+      - Latias & Latios
+      - Latias and Latios GX
+
+  Pikachu Illustrator:
+    aliases:
+      - Pikachu Illustrator

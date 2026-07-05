@@ -12,6 +12,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 DEFAULT_CARDS = CONFIG_DIR / "cards.yml"
 DEFAULT_WATCHLIST = CONFIG_DIR / "watchlist.yml"
+CARD_ALIASES = CONFIG_DIR / "card_aliases.yml"
+NON_CARD_TERMS = CONFIG_DIR / "non_card_terms.yml"
 BLOCKED_DOMAINS = CONFIG_DIR / "blocked_domains.yml"
 PRIORITY_DOMAINS = CONFIG_DIR / "priority_domains.yml"
 TCG_VOCABULARY = CONFIG_DIR / "tcg_vocabulary.yml"

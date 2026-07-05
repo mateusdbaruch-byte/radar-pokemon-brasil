@@ -82,6 +82,18 @@ python3 -m src.main classify-text "Procuro Charizard 151 português NM, pago à 
 
 TCG Pocket é bloqueado por padrão (foco em carta física). Futuro: `ENABLE_TCG_POCKET=true` no `.env`.
 
+### Detecção automática de cartas
+
+Módulo `src/card_detection.py` com prioridade:
+
+1. Hint `--card` (validado no texto quando possível)
+2. Aliases exatos em `config/card_aliases.yml`
+3. Nomes da `config/watchlist.yml`
+4. Aliases parciais com contexto TCG
+5. Fallback capitalizado (máx. confiança 50) — nunca verbos de `non_card_terms.yml`
+
+`classify-text` exibe carta, alias, confiança e motivo da detecção.
+
 ---
 
 ## Fontes PENDING_ACCESS (futuro)

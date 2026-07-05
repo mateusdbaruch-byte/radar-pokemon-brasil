@@ -26,7 +26,9 @@ python3 -m src.main quality-report
 ```
 
 A **TCG Knowledge Layer** (`src/tcg_knowledge.py`) carrega vocabulário extensível via YAML:
-`config/tcg_vocabulary.yml`, `collection_aliases.yml`, `rarity_terms.yml`, `condition_terms.yml`, `grading_terms.yml`, `market_jargon.yml`, `negative_terms.yml`, `query_templates.yml`.
+`config/tcg_vocabulary.yml`, `collection_aliases.yml`, `rarity_terms.yml`, `condition_terms.yml`, `grading_terms.yml`, `market_jargon.yml`, `negative_terms.yml`, `query_templates.yml`, `card_aliases.yml`, `non_card_terms.yml`.
+
+**Detecção automática de cartas:** `--card` é opcional. O radar usa `config/card_aliases.yml` e ignora verbos/termos genéricos (`non_card_terms.yml`). Novas cartas podem ser adicionadas só editando o YAML.
 
 ### Scan com precisão (strict + buyer-only)
 

@@ -55,16 +55,10 @@ def detect_card_in_text(text: str, known_cards: list[str]) -> str | None:
 
     Retorna o nome canônico ou None se nenhuma carta for encontrada.
     """
-    normalized_text = normalize_text(text)
-    for card in known_cards:
-        canonical = normalize_card_name(card)
-        if normalize_text(canonical) in normalized_text:
-            return canonical
-        # Também verifica aliases
-        for alias, target in CARD_ALIASES.items():
-            if target == canonical and alias in normalized_text:
-                return canonical
-    return None
+    from src.card_detection import detect_card_in_text as detect
+
+    result = detect(text, known_cards=known_cards)
+    return result or None
 
 
 def build_search_query(card_name: str, suffix: str = "") -> str:

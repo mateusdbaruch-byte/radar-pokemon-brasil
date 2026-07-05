@@ -81,6 +81,9 @@ class TextSignals:
 class TextClassification:
     text: str
     card_detected: str = ""
+    card_alias: str = ""
+    card_confidence: int = 0
+    card_detection_reason: str = ""
     signals: TextSignals = field(default_factory=TextSignals)
     opportunity_type: str = ""
     intent_score: int = 0
@@ -378,19 +381,15 @@ def generate_enriched_queries(
     return queries
 
 
-def detect_card_in_text(text: str, known_cards: list[str] | None = None) -> str:
-    """Detecta nome de carta no texto."""
-    if known_cards:
-        text_lower = text.lower()
-        for card in sorted(known_cards, key=len, reverse=True):
-            if card.lower() in text_lower:
-                return card
-    from src.normalizer import normalize_card_name
-    words = re.findall(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9'\-]+", text)
-    for word in words:
-        if len(word) >= 4 and word[0].isupper():
-            return normalize_card_name(word)
-    return ""
+def detect_card_in_text(
+    text: str,
+    known_cards: list[str] | None = None,
+    card_hint: str = "",
+) -> str:
+    """Detecta nome de carta no texto (delega para card_detection)."""
+    from src.card_detection import detect_card_in_text as _detect
+
+    return _detect(text, known_cards=known_cards, card_hint=card_hint)
 
 
 def classify_text(
@@ -399,9 +398,11 @@ def classify_text(
     known_cards: list[str] | None = None,
 ) -> TextClassification:
     """Classifica texto livre com a TCG Knowledge Layer."""
+    from src.card_detection import detect_card_match
     from src.opportunity_scoring import score_opportunity
 
-    card = card_hint or detect_card_in_text(text, known_cards)
+    match = detect_card_match(text, known_cards=known_cards, card_hint=card_hint)
+    card = match.card
     signals = analyze_text(text)
 
     opp = score_opportunity(
@@ -425,6 +426,9 @@ def classify_text(
     return TextClassification(
         text=text,
         card_detected=card,
+        card_alias=match.alias,
+        card_confidence=match.confidence,
+        card_detection_reason=match.reason,
         signals=signals,
         opportunity_type=opp.opportunity_type.value,
         intent_score=opp.intent_score,
