@@ -75,6 +75,13 @@ from src.opportunity_reporting import (
     display_review_opportunities,
 )
 from src.search_profiles import get_search_profile, list_profile_names
+from src.search_budget import (
+    BudgetMode,
+    SearchBudgetContext,
+    display_search_budget_report,
+    get_budget_status,
+)
+from src.watchlist_loader import load_watchlist_cards
 from src.opportunity_scanner import scan_opportunities
 from src.opportunity_db import save_wishlist_lead
 from src.wishlist import import_wishlist_csv, validate_wishlist_csv
@@ -313,7 +320,26 @@ def reddit_policy_status() -> None:
 
 
 def load_watchlist(path: Path) -> list[str]:
-    return load_yaml(path).get("cards", [])
+    return load_watchlist_cards(path)
+
+
+def _build_budget_ctx(
+    *,
+    profile: str = "",
+    no_cache: bool = False,
+    cache_ttl_hours: float = 24.0,
+    daily_budget: int | None = None,
+    monthly_budget: int | None = None,
+    budget_mode: BudgetMode = BudgetMode.NORMAL,
+) -> SearchBudgetContext:
+    return SearchBudgetContext(
+        profile=profile,
+        no_cache=no_cache,
+        cache_ttl_hours=cache_ttl_hours,
+        daily_budget=daily_budget,
+        monthly_budget=monthly_budget,
+        budget_mode=budget_mode,
+    )
 
 
 def parse_card_list(cards_arg: str) -> list[str]:
@@ -368,6 +394,12 @@ def _print_quality_test_summary(
     console.print(f"  Tempo total: {elapsed:.1f}s")
 
 
+@app.command("search-budget-report")
+def search_budget_report_cmd() -> None:
+    """Relatório de consumo de buscas SerpAPI/web_search."""
+    display_search_budget_report(console)
+
+
 @app.command("profiles-summary")
 def profiles_summary_cmd() -> None:
     """Lista perfis de busca disponíveis e seus filtros."""
@@ -385,6 +417,14 @@ def profile_quality_test_cmd(
     ),
     limit: int = typer.Option(5, "--limit", "-l"),
     max_queries: int = typer.Option(0, "--max-queries"),
+    budget_mode: BudgetMode = typer.Option(
+        BudgetMode.NORMAL,
+        "--budget-mode",
+        help="normal ou economy (menos queries, cache obrigatório)",
+    ),
+    daily_budget: int = typer.Option(0, "--daily-budget", help="Limite diário (0 = .env)"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    cache_ttl_hours: float = typer.Option(24.0, "--cache-ttl-hours"),
 ) -> None:
     """Teste de qualidade por perfil — mede aproveitamento e recomenda ajustes."""
     if not get_search_profile(profile):
@@ -428,6 +468,15 @@ def profile_quality_test_cmd(
         max_queries=query_cap,
         on_web_search_progress=_on_web_progress,
         profile=profile,
+        budget_mode=budget_mode,
+        budget_ctx=_build_budget_ctx(
+            profile=profile,
+            no_cache=no_cache,
+            cache_ttl_hours=cache_ttl_hours,
+            daily_budget=daily_budget if daily_budget > 0 else None,
+            budget_mode=budget_mode,
+        ),
+        watchlist_path=DEFAULT_WATCHLIST,
     )
 
     elapsed = time.monotonic() - scan_start
@@ -603,6 +652,14 @@ def scan_opportunities_cmd(
         "-p",
         help="Perfil de busca: demand_leads, supply_deals, market_reference",
     ),
+    budget_mode: BudgetMode = typer.Option(
+        BudgetMode.NORMAL,
+        "--budget-mode",
+        help="normal ou economy",
+    ),
+    daily_budget: int = typer.Option(0, "--daily-budget", help="Limite diário (0 = .env)"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    cache_ttl_hours: float = typer.Option(24.0, "--cache-ttl-hours"),
 ) -> None:
     """Escaneia oportunidades automatizadas nas fontes disponíveis."""
     if profile and not get_search_profile(profile):
@@ -635,12 +692,17 @@ def scan_opportunities_cmd(
         filter_notes.append("buyer-only")
     if seller_only:
         filter_notes.append("seller-only")
+    if budget_mode == BudgetMode.ECONOMY:
+        filter_notes.append("economy")
     filters_label = ", ".join(filter_notes) if filter_notes else "padrão"
 
+    budget_status = get_budget_status()
     console.print(
         f"[bold blue]🎯 Opportunity Radar — scan ({mode.value})[/bold blue]\n"
         f"[dim]Cartas: {len(card_list)} ({cards_label}) | Fontes: {sources} | "
-        f"max-queries: {query_cap or 'env'} | filtros: {filters_label}[/dim]\n"
+        f"max-queries: {query_cap or 'env'} | filtros: {filters_label} | "
+        f"buscas hoje: {budget_status.daily_used}/{budget_status.daily_limit} "
+        f"(restam {budget_status.remaining_daily})[/dim]\n"
     )
 
     def _on_web_progress(
@@ -651,6 +713,8 @@ def scan_opportunities_cmd(
         status = "[green]OK[/green]" if query_result.success else "[red]falha[/red]"
         if query_result.timed_out:
             status = "[yellow]timeout[/yellow]"
+        if query_result.cached:
+            status = "[blue]cache[/blue]"
         retry_note = ""
         if query_result.retries > 0:
             retry_note = f" | [yellow]retry×{query_result.retries}[/yellow]"
@@ -671,6 +735,15 @@ def scan_opportunities_cmd(
         buyer_only=buyer_only,
         seller_only=seller_only,
         profile=profile or None,
+        budget_mode=budget_mode,
+        budget_ctx=_build_budget_ctx(
+            profile=profile,
+            no_cache=no_cache,
+            cache_ttl_hours=cache_ttl_hours,
+            daily_budget=daily_budget if daily_budget > 0 else None,
+            budget_mode=budget_mode,
+        ),
+        watchlist_path=cards if not card.strip() else None,
     )
 
     elapsed = time.monotonic() - scan_start

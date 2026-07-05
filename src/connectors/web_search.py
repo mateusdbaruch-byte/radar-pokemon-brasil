@@ -16,6 +16,14 @@ from src.opportunity_db import save_query_run, save_rejected_result
 from src.opportunity_models import Opportunity
 from src.opportunity_quality import QualityFilterConfig, evaluate_hit, extract_domain
 from src.opportunity_scoring import score_opportunity
+from src.search_budget import (
+    BudgetExceededError,
+    SearchBudgetContext,
+    assert_budget_available,
+    record_search,
+    store_cache,
+    try_cache_hit,
+)
 from src.tcg_knowledge import enrich_opportunity, generate_enriched_queries
 
 logger = logging.getLogger(__name__)
@@ -84,6 +92,7 @@ class WebSearchQueryResult:
     retries: int = 0
     elapsed_seconds: float = 0.0
     error: str = ""
+    cached: bool = False
 
 
 @dataclass
@@ -98,6 +107,9 @@ class WebSearchScanStats:
     results_rejected: int = 0
     urls_deduplicated: int = 0
     elapsed_seconds: float = 0.0
+    queries_cached: int = 0
+    budget_stopped: bool = False
+    budget_message: str = ""
 
 
 ProgressCallback = Callable[[WebSearchQueryResult, int, int], None]
@@ -245,11 +257,47 @@ class WebSearchConnector:
             )
         return status_code in (429, 500, 502, 503, 504)
 
-    def search_query(self, query: str, limit: int = 10) -> WebSearchQueryResult:
-        """Executa uma query com timeout, retry e backoff exponencial."""
+    def search_query(
+        self,
+        query: str,
+        limit: int = 10,
+        budget_ctx: SearchBudgetContext | None = None,
+    ) -> WebSearchQueryResult:
+        """Executa uma query com timeout, retry, cache e controle de orçamento."""
         result = WebSearchQueryResult(query=query)
         if not self.is_configured():
             result.error = "web_search não configurado"
+            return result
+
+        ctx = budget_ctx or SearchBudgetContext(provider=self.provider)
+        ctx.provider = self.provider
+
+        if ctx.cache_enabled:
+            cached_hits = try_cache_hit(ctx, query, limit)
+            if cached_hits is not None:
+                result.hits = [
+                    WebSearchHit(
+                        title=h.get("title", ""),
+                        snippet=h.get("snippet", ""),
+                        url=h.get("url", ""),
+                    )
+                    for h in cached_hits
+                ]
+                result.success = True
+                result.cached = True
+                record_search(
+                    ctx, query,
+                    success=True,
+                    results_count=len(result.hits),
+                    cached=True,
+                    cost_unit=0,
+                )
+                return result
+
+        try:
+            assert_budget_available(ctx)
+        except BudgetExceededError as exc:
+            result.error = str(exc)
             return result
 
         start = time.monotonic()
@@ -283,6 +331,20 @@ class WebSearchConnector:
                     result.hits = self._parse_hits(data, limit)
                     result.success = True
                     result.elapsed_seconds = time.monotonic() - start
+                    record_search(
+                        ctx, query,
+                        success=True,
+                        results_count=len(result.hits),
+                        cached=False,
+                        cost_unit=1,
+                    )
+                    if ctx.cache_enabled and result.hits:
+                        store_cache(
+                            ctx,
+                            query,
+                            limit,
+                            [h.__dict__ for h in result.hits],
+                        )
                     return result
 
                 last_error = f"HTTP {status_code}"
@@ -293,6 +355,13 @@ class WebSearchConnector:
 
         result.error = last_error or "falha desconhecida"
         result.elapsed_seconds = time.monotonic() - start
+        record_search(
+            ctx, query,
+            success=False,
+            results_count=0,
+            cached=False,
+            cost_unit=1,
+        )
         return result
 
     def scan_cards(
@@ -305,6 +374,8 @@ class WebSearchConnector:
         quality_config: QualityFilterConfig | None = None,
         profile_name: str = "",
         query_templates: list[str] | None = None,
+        budget_ctx: SearchBudgetContext | None = None,
+        queries_per_card: int | None = None,
     ) -> WebSearchScanResult:
         """Busca oportunidades para cada carta usando templates de intenção."""
         scan = WebSearchScanResult()
@@ -316,9 +387,10 @@ class WebSearchConnector:
             return scan
 
         planned: list[tuple[str, str]] = []
+        templates = query_templates
         for card in cards:
-            if query_templates:
-                queries = [t.format(card=card) for t in query_templates]
+            if templates:
+                queries = [t.format(card=card) for t in templates]
             else:
                 queries = self.get_queries_for_card(
                     card,
@@ -326,6 +398,8 @@ class WebSearchConnector:
                     buyer_only=qcfg.buyer_only,
                     seller_only=qcfg.seller_only,
                 )
+            if queries_per_card and queries_per_card > 0:
+                queries = queries[:queries_per_card]
             for query in queries:
                 planned.append((card, query))
 
@@ -337,12 +411,36 @@ class WebSearchConnector:
         seen_urls: dict[str, Opportunity] = {}
         scan_start = time.monotonic()
 
+        base_ctx = budget_ctx or SearchBudgetContext(provider=self.provider)
+        base_ctx.provider = self.provider
+        base_ctx.profile = profile
+
         for idx, (card, query) in enumerate(planned, start=1):
             if idx > 1 and self.config.delay_seconds > 0:
                 time.sleep(self.config.delay_seconds)
 
-            query_result = self.search_query(query, limit=limit_per_query)
+            query_ctx = SearchBudgetContext(
+                provider=base_ctx.provider,
+                profile=base_ctx.profile,
+                card=card,
+                use_cache=base_ctx.use_cache,
+                no_cache=base_ctx.no_cache,
+                cache_ttl_hours=base_ctx.cache_ttl_hours,
+                daily_budget=base_ctx.daily_budget,
+                monthly_budget=base_ctx.monthly_budget,
+                stop_when_reached=base_ctx.stop_when_reached,
+                budget_mode=base_ctx.budget_mode,
+            )
+
+            query_result = self.search_query(query, limit=limit_per_query, budget_ctx=query_ctx)
+            if query_result.error and "Limite" in query_result.error:
+                stats.budget_stopped = True
+                stats.budget_message = query_result.error
+                break
+
             stats.queries_executed += 1
+            if query_result.cached:
+                stats.queries_cached += 1
             if query_result.success:
                 stats.queries_success += 1
             if query_result.timed_out:

@@ -1,12 +1,22 @@
-# Cartas monitoradas pelo Opportunity Radar
+# Cartas monitoradas pelo Opportunity Radar (com prioridade para modo economy)
 cards:
-  - Charizard
-  - Umbreon
-  - Pikachu
-  - Mew
-  - Gengar
-  - Lugia
-  - Rayquaza
-  - Giratina
-  - Greninja
-  - Eevee
+  Charizard:
+    priority: high
+  Umbreon:
+    priority: high
+  Mew:
+    priority: medium
+  Pikachu:
+    priority: medium
+  Gengar:
+    priority: medium
+  Lugia:
+    priority: low
+  Rayquaza:
+    priority: low
+  Giratina:
+    priority: low
+  Greninja:
+    priority: low
+  Eevee:
+    priority: low

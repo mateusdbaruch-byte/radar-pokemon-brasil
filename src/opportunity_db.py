@@ -76,6 +76,32 @@ CREATE TABLE IF NOT EXISTS query_runs (
 );
 """
 
+CREATE_SEARCH_BUDGET_TABLE = """
+CREATE TABLE IF NOT EXISTS search_budget_usage (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    profile TEXT DEFAULT '',
+    card TEXT DEFAULT '',
+    query TEXT NOT NULL,
+    executed_at TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 0,
+    results_count INTEGER NOT NULL DEFAULT 0,
+    cached INTEGER NOT NULL DEFAULT 0,
+    cost_unit INTEGER NOT NULL DEFAULT 1
+);
+"""
+
+CREATE_QUERY_CACHE_TABLE = """
+CREATE TABLE IF NOT EXISTS query_cache (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    query TEXT NOT NULL,
+    result_limit INTEGER NOT NULL DEFAULT 5,
+    hits_json TEXT NOT NULL,
+    cached_at TEXT NOT NULL
+);
+"""
+
 CREATE_WISHLIST_TABLE = """
 CREATE TABLE IF NOT EXISTS wishlist_leads (
     id TEXT PRIMARY KEY,
@@ -103,6 +129,9 @@ CREATE INDEX IF NOT EXISTS idx_rejected_at ON rejected_results(rejected_at DESC)
 CREATE INDEX IF NOT EXISTS idx_rejected_reason ON rejected_results(reason);
 CREATE INDEX IF NOT EXISTS idx_query_runs_profile ON query_runs(profile);
 CREATE INDEX IF NOT EXISTS idx_query_runs_executed ON query_runs(executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_budget_executed ON search_budget_usage(executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_budget_provider ON search_budget_usage(provider);
+CREATE INDEX IF NOT EXISTS idx_query_cache_lookup ON query_cache(provider, query, result_limit);
 """
 
 
@@ -158,6 +187,8 @@ def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
         + CREATE_WISHLIST_TABLE
         + CREATE_REJECTED_TABLE
         + CREATE_QUERY_RUNS_TABLE
+        + CREATE_SEARCH_BUDGET_TABLE
+        + CREATE_QUERY_CACHE_TABLE
         + CREATE_OPP_INDEXES
     )
     _migrate(conn)
@@ -952,3 +983,216 @@ def count_rejected_domains(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
         if domain:
             counts[domain] = counts.get(domain, 0) + 1
     return dict(sorted(counts.items(), key=lambda x: -x[1]))
+
+
+def _budget_since(days: int) -> str:
+    from datetime import timedelta
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    return since.isoformat()
+
+
+def _resolve_db(db_path: Path | str | None) -> Path | str:
+    return db_path if db_path is not None else DEFAULT_DB
+
+
+def record_budget_usage(
+    provider: str,
+    query: str,
+    *,
+    profile: str = "",
+    card: str = "",
+    success: bool = False,
+    results_count: int = 0,
+    cached: bool = False,
+    cost_unit: int = 1,
+    db_path: Path | str | None = None,
+) -> str:
+    db_path = _resolve_db(db_path)
+    row_id = str(uuid.uuid4())
+    conn = _conn(db_path)
+    conn.execute(
+        """
+        INSERT INTO search_budget_usage (
+            id, provider, profile, card, query, executed_at,
+            success, results_count, cached, cost_unit
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            row_id,
+            provider,
+            profile,
+            card,
+            query,
+            datetime.now(timezone.utc).isoformat(),
+            1 if success else 0,
+            results_count,
+            1 if cached else 0,
+            cost_unit,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def count_budget_usage(
+    days: int = 1,
+    *,
+    api_only: bool = False,
+    cached_only: bool = False,
+    db_path: Path | str | None = None,
+) -> int:
+    db_path = _resolve_db(db_path)
+    conn = _conn(db_path)
+    if cached_only:
+        sql = "SELECT COUNT(*) as cnt FROM search_budget_usage WHERE executed_at >= ? AND cached = 1"
+    else:
+        sql = "SELECT COALESCE(SUM(cost_unit), 0) as cnt FROM search_budget_usage WHERE executed_at >= ?"
+        if api_only:
+            sql += " AND cached = 0 AND cost_unit > 0"
+    params: list[Any] = [_budget_since(days)]
+    row = conn.execute(sql, params).fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
+
+
+def _budget_group_count(
+    column: str,
+    days: int = 30,
+    *,
+    api_only: bool = True,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, int]:
+    conn = _conn(db_path)
+    sql = f"""
+        SELECT {column}, SUM(cost_unit) as cnt
+        FROM search_budget_usage
+        WHERE executed_at >= ?
+    """
+    params: list[Any] = [_budget_since(days)]
+    if api_only:
+        sql += " AND cached = 0 AND cost_unit > 0"
+    sql += f" GROUP BY {column} ORDER BY cnt DESC"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return {r[column] or "": int(r["cnt"]) for r in rows}
+
+
+def count_budget_usage_by_profile(
+    days: int = 30,
+    *,
+    api_only: bool = True,
+    db_path: Path | str | None = None,
+) -> dict[str, int]:
+    db_path = _resolve_db(db_path)
+    return _budget_group_count("profile", days, api_only=api_only, db_path=db_path)
+
+
+def count_budget_usage_by_card(
+    days: int = 30,
+    *,
+    api_only: bool = True,
+    db_path: Path | str | None = None,
+) -> dict[str, int]:
+    db_path = _resolve_db(db_path)
+    return _budget_group_count("card", days, api_only=api_only, db_path=db_path)
+
+
+def count_budget_usage_by_query(
+    days: int = 30,
+    *,
+    api_only: bool = True,
+    db_path: Path | str | None = None,
+) -> dict[str, int]:
+    db_path = _resolve_db(db_path)
+    return _budget_group_count("query", days, api_only=api_only, db_path=db_path)
+
+
+def top_consuming_profiles(
+    days: int = 30,
+    db_path: Path | str | None = None,
+) -> list[tuple[str, int]]:
+    db_path = _resolve_db(db_path)
+    return list(count_budget_usage_by_profile(days, db_path=db_path).items())
+
+
+def get_last_profile_usage_today(
+    *,
+    api_only: bool = True,
+    db_path: Path | str | None = None,
+) -> str | None:
+    db_path = _resolve_db(db_path)
+    conn = _conn(db_path)
+    sql = """
+        SELECT profile FROM search_budget_usage
+        WHERE executed_at >= ? AND profile IS NOT NULL AND profile != ''
+    """
+    params: list[Any] = [_budget_since(1)]
+    if api_only:
+        sql += " AND cached = 0 AND cost_unit > 0"
+    sql += " ORDER BY executed_at DESC LIMIT 1"
+    row = conn.execute(sql, params).fetchone()
+    conn.close()
+    return row["profile"] if row else None
+
+
+def save_query_cache(
+    provider: str,
+    query: str,
+    result_limit: int,
+    hits: list[dict],
+    db_path: Path | str | None = None,
+) -> None:
+    db_path = _resolve_db(db_path)
+    conn = _conn(db_path)
+    conn.execute(
+        "DELETE FROM query_cache WHERE provider = ? AND query = ? AND result_limit = ?",
+        (provider, query, result_limit),
+    )
+    conn.execute(
+        """
+        INSERT INTO query_cache (id, provider, query, result_limit, hits_json, cached_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            provider,
+            query,
+            result_limit,
+            json.dumps(hits, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def fetch_cached_query(
+    provider: str,
+    query: str,
+    result_limit: int,
+    *,
+    ttl_hours: float = 24.0,
+    db_path: Path | str | None = None,
+) -> list[dict] | None:
+    db_path = _resolve_db(db_path)
+    from datetime import timedelta
+    conn = _conn(db_path)
+    row = conn.execute(
+        """
+        SELECT hits_json, cached_at FROM query_cache
+        WHERE provider = ? AND query = ? AND result_limit = ?
+        ORDER BY cached_at DESC LIMIT 1
+        """,
+        (provider, query, result_limit),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    cached_at = datetime.fromisoformat(row["cached_at"])
+    if datetime.now(timezone.utc) - cached_at > timedelta(hours=ttl_hours):
+        return None
+    try:
+        return json.loads(row["hits_json"])
+    except json.JSONDecodeError:
+        return None

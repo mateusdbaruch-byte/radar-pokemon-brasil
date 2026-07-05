@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from src.connectors.mercado_livre import MercadoLivreConnector
@@ -19,8 +20,17 @@ from src.opportunity_db import fetch_wishlist_leads
 from src.opportunity_models import Opportunity
 from src.opportunity_quality import QualityFilterConfig
 from src.opportunity_scoring import score_opportunity, wishlist_lead_to_opportunity
+from src.paths import DEFAULT_WATCHLIST
+from src.search_budget import (
+    BudgetMode,
+    SearchBudgetContext,
+    check_profile_mix_economy,
+    economy_max_templates,
+    economy_queries_per_card,
+)
 from src.search_profiles import SearchProfile, get_search_profile
 from src.source_registry import SourceAccess, SourceInfo, get_source_registry, parse_source_list
+from src.watchlist_loader import filter_cards_for_economy, priorities_from_watchlist
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +64,9 @@ def _scan_web_search(
     on_progress: ProgressCallback | None,
     quality_config: QualityFilterConfig | None = None,
     profile: SearchProfile | None = None,
+    budget_ctx: SearchBudgetContext | None = None,
+    budget_mode: BudgetMode = BudgetMode.NORMAL,
+    watchlist_path: Path | None = None,
 ) -> tuple[list[Opportunity], WebSearchScanStats | None]:
     config = WebSearchConfig.from_env(mode)
     connector = WebSearchConnector(config=config)
@@ -61,7 +74,23 @@ def _scan_web_search(
         return [], None
 
     qcfg = quality_config or QualityFilterConfig()
-    templates = profile.query_templates if profile else None
+    templates = list(profile.query_templates) if profile else None
+    queries_per_card: int | None = None
+
+    if budget_mode == BudgetMode.ECONOMY:
+        prio_map = priorities_from_watchlist(watchlist_path or DEFAULT_WATCHLIST)
+        cards = filter_cards_for_economy(cards, prio_map)
+        if templates:
+            templates = templates[:economy_max_templates(len(templates))]
+        queries_per_card = economy_queries_per_card()
+        if profile:
+            mix_warn = check_profile_mix_economy(profile.name)
+            if mix_warn:
+                stats = WebSearchScanStats()
+                stats.budget_stopped = True
+                stats.budget_message = mix_warn
+                return [], stats
+
     per_query = max(1, limit // max(len(templates or [1]), 1))
     scan = connector.scan_cards(
         cards,
@@ -72,6 +101,8 @@ def _scan_web_search(
         quality_config=qcfg,
         profile_name=profile.name if profile else "",
         query_templates=templates,
+        budget_ctx=budget_ctx,
+        queries_per_card=queries_per_card,
     )
     return scan.opportunities, scan.stats
 
@@ -131,6 +162,9 @@ def scan_opportunities(
     buyer_only: bool = False,
     seller_only: bool = False,
     profile: str | None = None,
+    budget_mode: BudgetMode = BudgetMode.NORMAL,
+    budget_ctx: SearchBudgetContext | None = None,
+    watchlist_path: Path | None = None,
 ) -> ScanResult:
     """Executa scan nas fontes selecionadas."""
     result = ScanResult()
@@ -186,11 +220,16 @@ def scan_opportunities(
                     on_web_search_progress,
                     quality_config,
                     profile=search_profile,
+                    budget_ctx=budget_ctx,
+                    budget_mode=budget_mode,
+                    watchlist_path=watchlist_path,
                 )
                 result.web_search_stats = stats
                 if stats:
                     result.urls_deduplicated_in_scan = stats.urls_deduplicated
                     result.results_rejected = stats.results_rejected
+                    if stats.budget_stopped and stats.budget_message:
+                        result.messages.append(stats.budget_message)
             elif source_name == "wishlist":
                 opps = _scan_wishlist(cards)
             elif source_name == "mercado_livre":

@@ -116,7 +116,7 @@ class TestWebSearchScan:
 
         queries_seen: list[str] = []
 
-        def mock_search_query(query, limit=10):
+        def mock_search_query(query, limit=10, budget_ctx=None):
             queries_seen.append(query)
             from src.connectors.web_search import WebSearchQueryResult
             return WebSearchQueryResult(query=query, success=True, hits=[])
@@ -144,7 +144,7 @@ class TestWebSearchScan:
             url="https://ex.com/shared",
         )
 
-        def mock_search_query(query, limit=10):
+        def mock_search_query(query, limit=10, budget_ctx=None):
             from src.connectors.web_search import WebSearchQueryResult
             return WebSearchQueryResult(query=query, success=True, hits=[shared_hit])
 
@@ -227,7 +227,7 @@ class TestScanOpportunitiesModes:
 
         connector = WebSearchConnector(config=WebSearchConfig(delay_seconds=0, max_retries=0))
 
-        def mock_search_query(self, query, limit=10):
+        def mock_search_query(self, query, limit=10, budget_ctx=None):
             from src.connectors.web_search import WebSearchQueryResult
             return WebSearchQueryResult(query=query, timed_out=True, error="timeout")
 

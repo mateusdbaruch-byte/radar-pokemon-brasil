@@ -163,6 +163,18 @@ python3 -m src.main setup-env
 
 **Controle de carga** (`.env`): `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_SEARCH_DELAY_SECONDS`, `WEB_SEARCH_MAX_RETRIES`, `WEB_SEARCH_MAX_QUERIES_PER_RUN`.
 
+**Orçamento SerpAPI** (`.env`): `SERPAPI_MONTHLY_BUDGET`, `SERPAPI_DAILY_BUDGET`, `SERPAPI_STOP_WHEN_BUDGET_REACHED`. Cache de queries 24h por padrão.
+
+### Plano gratuito / consumo controlado
+
+```bash
+python3 -m src.main search-budget-report
+python3 -m src.main scan-opportunities --profile demand_leads --cards config/watchlist.yml --budget-mode economy --limit 5
+python3 -m src.main search-budget-report
+```
+
+Flags úteis: `--budget-mode economy`, `--daily-budget 20`, `--no-cache`, `--cache-ttl-hours 24`.
+
 **Modos de scan:** `--mode light` (4 templates por carta) ou `--mode deep` (mais templates, delay dobrado).
 
 Documentação completa: [`docs/AUTOMATED_OPPORTUNITY_RADAR.md`](docs/AUTOMATED_OPPORTUNITY_RADAR.md)
@@ -492,6 +504,7 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main expand-queries --card Charizard` | Preview das queries enriquecidas |
 | `python3 -m src.main classify-text "..."` | Classifica texto com TCG Knowledge Layer |
 | `python3 -m src.main web-search-test` | Testa uma query web_search |
+| `python3 -m src.main search-budget-report` | Consumo SerpAPI — hoje, semana, mês |
 | `python3 -m src.main profiles-summary` | Perfis de busca disponíveis |
 | `python3 -m src.main profile-quality-test --profile demand_leads` | Teste de qualidade por perfil |
 | `python3 -m src.main scan-opportunities --profile demand_leads` | Scan com perfil de busca |
