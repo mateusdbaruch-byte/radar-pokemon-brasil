@@ -198,7 +198,7 @@ def _check_env() -> HealthCheckResult:
             data_mode=ConnectorDataMode.UNAVAILABLE,
             http_status=None,
             message="Arquivo .env não encontrado",
-            next_action=f"Copie: cp {example_path.name} .env",
+            next_action="Copie: python -m src.main setup-env",
         )
     has_ua = bool(os.getenv("REDDIT_USER_AGENT", "").strip())
     has_oauth = bool(os.getenv("REDDIT_CLIENT_ID", "").strip())

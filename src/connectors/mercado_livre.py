@@ -189,11 +189,17 @@ class MercadoLivreConnector:
         self.request_delay = request_delay
         self.session = requests.Session()
         headers = {
-            "User-Agent": "RadarPokemonBrasil/1.0 (+https://github.com; MVP educacional)",
+            "User-Agent": os.getenv(
+                "MERCADOLIVRE_USER_AGENT",
+                os.getenv("ML_USER_AGENT", "RadarPokemonBrasil/0.1 (+https://github.com; MVP educacional)"),
+            ).strip(),
             "Accept": "application/json",
             "Accept-Language": "pt-BR,pt;q=0.9",
         }
-        token = os.getenv("ML_ACCESS_TOKEN", "").strip()
+        token = (
+            os.getenv("MERCADOLIVRE_ACCESS_TOKEN", "").strip()
+            or os.getenv("ML_ACCESS_TOKEN", "").strip()
+        )
         if token:
             headers["Authorization"] = f"Bearer {token}"
         self.session.headers.update(headers)

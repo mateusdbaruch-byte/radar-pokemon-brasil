@@ -15,9 +15,12 @@ DEFAULT_KEYWORDS = CONFIG_DIR / "keywords.yml"
 DEFAULT_SOURCES = CONFIG_DIR / "sources.yml"
 DEFAULT_DB = DATA_DIR / "radar.db"
 DEFAULT_CSV = DATA_DIR / "radar_results.csv"
+IMPORTS_DIR = DATA_DIR / "imports"
+DEFAULT_MANUAL_IMPORT = IMPORTS_DIR / "manual_prices_example.csv"
 
 
 def ensure_data_dir() -> Path:
     """Garante que a pasta data/ existe."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    IMPORTS_DIR.mkdir(parents=True, exist_ok=True)
     return DATA_DIR

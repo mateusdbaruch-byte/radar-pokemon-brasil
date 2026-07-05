@@ -34,6 +34,7 @@ def _reddit_diag(**kwargs) -> RedditDiagnosticResult:
         needs_oauth=False,
         oauth_message="",
         auth_mode="public",
+        auth_status="live",
         error_message=None,
         suggestions=[],
     )
@@ -57,5 +58,8 @@ class TestHealthAdapters:
         assert "oauth" in health.message
 
     def test_reddit_forbidden(self):
-        health = reddit_to_health(_reddit_diag(status_code=403, is_valid_json=False))
+        health = reddit_to_health(
+            _reddit_diag(status_code=403, is_valid_json=False, auth_status="blocked")
+        )
         assert health.http_status == 403
+        assert health.data_mode == ConnectorDataMode.BLOCKED

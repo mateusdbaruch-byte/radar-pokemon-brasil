@@ -54,6 +54,9 @@ class ConnectorDataMode(str, Enum):
     LIVE = "live"
     MOCK = "mock"
     UNAVAILABLE = "unavailable"
+    AUTH_FAILED = "auth_failed"
+    MISSING_CREDENTIALS = "missing_credentials"
+    BLOCKED = "blocked"
 
 
 @dataclass

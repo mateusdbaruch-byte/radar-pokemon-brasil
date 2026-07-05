@@ -53,15 +53,70 @@ No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.
 
 ---
 
-## Primeiro teste (recomendado)
+## Primeira validação real (recomendado)
+
+### 1. Configurar ambiente
+
+```bash
+python3 -m src.main setup-env
+```
+
+Copia `.env.example` → `.env` e lista variáveis a preencher **manualmente** (sem pedir senha no terminal).
+
+Edite `.env` com credenciais Reddit OAuth ([reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)):
+
+```env
+REDDIT_CLIENT_ID=seu_id
+REDDIT_CLIENT_SECRET=seu_secret
+REDDIT_USER_AGENT=python:radar-pokemon-brasil:v0.1.0 (by /u/SEU_USUARIO)
+```
+
+### 2. Testar Reddit OAuth
+
+```bash
+python3 -m src.main test-reddit-auth
+```
+
+Mostra quais campos estão preenchidos (sem revelar valores), tenta autenticar e faz busca de teste.
+
+### 3. Buscar Reddit real
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main search-reddit --query "pokemon tcg brasil" --limit 10
+python3 -m src.main report
+```
+
+### 4. Importar preços manuais (LigaPokemon / MYP Cards)
+
+```bash
+python3 -m src.main validate-import data/imports/manual_prices_example.csv
+python3 -m src.main import-prices data/imports/manual_prices_example.csv
+python3 -m src.main market-snapshot
+```
+
+O `market-snapshot` usa **live + manual_import** — nunca mock.
+
+### 5. Busca por fonte específica
+
+```bash
+python3 -m src.main search --sources reddit --cards config/cards.yml --limit 20 --live-only
+python3 -m src.main search --sources mercado_livre,reddit --live-only
+```
+
+Se Mercado Livre retornar 403, o Reddit pode continuar sozinho.
+
+---
+
+## Primeiro teste (diagnóstico)
 
 ```bash
 python3 -m src.main doctor
 ```
 
-O `doctor` verifica Mercado Livre, Reddit, SQLite, CSV, `.env` e arquivos de config. Mostra uma tabela com status, modo dos dados e próxima ação.
+O `doctor` verifica Mercado Livre, Reddit, SQLite, CSV, `.env` e arquivos de config.
 
-**Busca apenas com dados reais:**
+**Busca apenas com dados reais (todas as fontes):**
 
 ```bash
 python3 -m src.main reset-db --force
@@ -77,7 +132,7 @@ python3 -m src.main search --cards config/cards.yml --limit 20 --mock-only
 python3 -m src.main report
 ```
 
-Guia completo de validação: [`docs/VALIDACAO_DADOS_REAIS.md`](docs/VALIDACAO_DADOS_REAIS.md)
+Guia completo: [`docs/VALIDACAO_DADOS_REAIS.md`](docs/VALIDACAO_DADOS_REAIS.md)
 
 ---
 
@@ -271,17 +326,23 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 
 | Comando | O que faz |
 |---------|-----------|
-| `python3 -m src.main doctor` | Diagnóstico geral (conectores, banco, configs) |
+| `python3 -m src.main setup-env` | Cria `.env` a partir do exemplo |
+| `python3 -m src.main test-reddit-auth` | Testa OAuth Reddit (sem salvar dados) |
+| `python3 -m src.main search-reddit` | Busca apenas Reddit (live) |
+| `python3 -m src.main validate-import` | Valida CSV de preços manuais |
+| `python3 -m src.main import-prices` | Importa LigaPokemon/MYP (manual_import) |
+| `python3 -m src.main market-snapshot` | Snapshot live + manual (sem mock) |
+| `python3 -m src.main doctor` | Diagnóstico geral |
 | `python3 -m src.main source-status` | Último status de cada conector |
-| `python3 -m src.main search` | Busca sinais nas fontes configuradas |
-| `python3 -m src.main search --live-only` | Apenas dados reais (validação) |
-| `python3 -m src.main search --allow-mock` | Padrão — permite fallback mock |
+| `python3 -m src.main search` | Busca nas fontes configuradas |
+| `python3 -m src.main search --sources reddit` | Busca só Reddit |
+| `python3 -m src.main search --live-only` | Apenas dados reais |
 | `python3 -m src.main search --mock-only` | Apenas dados simulados |
 | `python3 -m src.main report` | Relatório de inteligência de mercado |
 | `python3 -m src.main export` | Exporta CSV |
-| `python3 -m src.main reset-db` | Apaga banco e CSV (com confirmação) |
-| `python3 -m src.main test-mercadolivre` | Diagnostica API do Mercado Livre |
-| `python3 -m src.main test-reddit` | Diagnostica API do Reddit |
+| `python3 -m src.main reset-db` | Apaga banco e CSV |
+| `python3 -m src.main test-mercadolivre` | Diagnóstico ML (não grava anúncios) |
+| `python3 -m src.main test-reddit` | Diagnóstico Reddit |
 | `python3 -m src.main --help` | Lista todas as opções |
 
 ### Diagnosticar Mercado Livre
@@ -314,7 +375,8 @@ python3 -m src.main test-reddit -q "charizard" --subreddit PokemonTCG
 | `--live-only` | Apenas dados reais; sem fallback mock |
 | `--allow-mock` | Padrão — permite mock se APIs falharem |
 | `--mock-only` | Apenas dados simulados (`data_mode=mock`) |
-| `--limit 20` | Máximo por carta por fonte |
+| `--sources reddit` | Filtra fontes (reddit, mercado_livre, youtube) |
+| `--sources-config` | Caminho do YAML de fontes (padrão: config/sources.yml) |
 
 ---
 
@@ -351,8 +413,9 @@ radar-pokemon-brasil/
 
 | Fonte | Status | Precisa de chave? |
 |-------|--------|-------------------|
-| Reddit | ✅ Ativo | User-Agent no `.env`; OAuth opcional |
-| Mercado Livre | ✅ Ativo | API pública; `ML_ACCESS_TOKEN` opcional |
+| Reddit | ✅ Ativo | OAuth via `.env` (setup-env) |
+| Mercado Livre | ⚙️ Diagnóstico | API pública; 403 comum — não trava MVP |
+| LigaPokemon / MYP | ✅ Import manual | `import-prices` (manual_import) |
 | YouTube | ⚙️ Opcional | Sim (`YOUTUBE_API_KEY`) |
 | Discord | 📋 Futuro | Importação manual |
 | Facebook/Instagram | ❌ Futuro | Ver `docs/future_connectors_meta.md` |

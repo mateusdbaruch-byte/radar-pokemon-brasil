@@ -13,21 +13,32 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 
-from src.connector_health import fetch_latest_by_source, save_health_check, save_search_run_log
-from src.connectors.discord_placeholder import DiscordPlaceholderConnector
+from src.connector_health import (
+    ConnectorDataMode,
+    HealthCheckResult,
+    HealthStatus,
+    fetch_latest_by_source,
+    save_health_check,
+    save_search_run_log,
+)
 from src.connectors.mercado_livre import MercadoLivreConnector, diagnose_search as diagnose_ml
 from src.connectors.mercado_livre import get_mock_results as ml_mock
 from src.connectors.reddit import RedditConnector, diagnose_search as diagnose_reddit
 from src.connectors.reddit import get_mock_results as reddit_mock
+from src.connectors.reddit import test_reddit_auth_and_search
 from src.connectors.youtube import YouTubeConnector
 from src.database import count_by_data_mode, fetch_all, reset_all_data, save_results
 from src.doctor import run_doctor
 from src.exporters import export_to_csv
 from src.health_adapters import mercado_livre_to_health, reddit_to_health
-from src.models import DataMode, tag_results
+from src.manual_import import import_prices_from_csv, validate_import_file
+from src.market_snapshot import display_market_snapshot
+from src.models import DataMode, RadarResult, tag_results
 from src.paths import DEFAULT_CARDS, DEFAULT_CSV, DEFAULT_DB, DEFAULT_SOURCES, PROJECT_ROOT
+from src.reddit_auth import REDDIT_ENV_FIELDS, RedditAuthStatus, inspect_reddit_env
 from src.reporting import display_market_report
 from src.search_modes import SearchMode, resolve_search_mode
+from src.setup_env import run_setup_env
 
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -44,6 +55,8 @@ logging.basicConfig(
     handlers=[RichHandler(console=console, show_path=False)],
 )
 logger = logging.getLogger(__name__)
+
+KNOWN_SOURCES = frozenset({"reddit", "mercado_livre", "youtube", "discord"})
 
 
 def load_yaml(path: Path) -> dict:
@@ -62,6 +75,23 @@ def load_sources_config(sources_path: Path) -> dict:
     return load_yaml(sources_path).get("sources", {})
 
 
+def parse_source_filter(sources: str | None) -> set[str] | None:
+    """Converte 'reddit,mercado_livre' em conjunto de nomes."""
+    if not sources or not sources.strip():
+        return None
+    selected = {s.strip().lower() for s in sources.split(",") if s.strip()}
+    unknown = selected - KNOWN_SOURCES
+    if unknown:
+        console.print(f"[red]Fontes desconhecidas: {', '.join(sorted(unknown))}[/red]")
+        console.print(f"[dim]Válidas: {', '.join(sorted(KNOWN_SOURCES))}[/dim]")
+        raise typer.Exit(1)
+    return selected
+
+
+def _source_enabled(selected: set[str] | None, name: str) -> bool:
+    return selected is None or name in selected
+
+
 def _print_source_error(source_name: str, hint: str) -> None:
     console.print(
         Panel(
@@ -73,14 +103,268 @@ def _print_source_error(source_name: str, hint: str) -> None:
     )
 
 
+def _run_reddit_search(
+    card_list: list[str],
+    sources_cfg: dict,
+    limit: int,
+    mode: SearchMode,
+) -> tuple[list[RadarResult], int]:
+    """Executa busca Reddit. Retorna (resultados, erros)."""
+    reddit_cfg = sources_cfg.get("reddit", {})
+    if not reddit_cfg.get("enabled", True):
+        return [], 0
+
+    console.print("[cyan]→ Reddit[/cyan]")
+    if mode == SearchMode.MOCK_ONLY:
+        results: list[RadarResult] = []
+        for card in card_list:
+            results.extend(reddit_mock(card))
+        return results, 0
+
+    connector = RedditConnector(
+        subreddits=reddit_cfg.get("subreddits"),
+        query_suffix=reddit_cfg.get("query_suffix", "pokemon card"),
+        require_oauth=(mode == SearchMode.LIVE_ONLY),
+    )
+    mode_label = "OAuth" if connector.uses_oauth else connector.auth_mode
+    console.print(f"[dim]  Modo Reddit: {mode_label}[/dim]")
+
+    if mode == SearchMode.LIVE_ONLY and not connector.auth_ok:
+        console.print(f"[yellow]  Auth: {connector.auth_result.status.value} — {connector.auth_result.message}[/yellow]")
+        _print_source_error("Reddit", "Rode setup-env e test-reddit-auth")
+        return [], 1
+
+    results = tag_results(
+        connector.search_cards(card_list, limit_per_card=limit),
+        DataMode.LIVE,
+    )
+    if results:
+        return results, 0
+    if mode == SearchMode.LIVE_ONLY:
+        _print_source_error("Reddit", "Configure OAuth no .env ou teste em rede residencial")
+        return [], 1
+    if mode == SearchMode.ALLOW_MOCK:
+        console.print("[yellow]  Reddit vazio — fallback mock[/yellow]")
+        mock_results: list[RadarResult] = []
+        for card in card_list:
+            mock_results.extend(reddit_mock(card))
+        return mock_results, 0
+    return [], 0
+
+
+def _run_ml_search(
+    card_list: list[str],
+    sources_cfg: dict,
+    limit: int,
+    mode: SearchMode,
+) -> tuple[list[RadarResult], int]:
+    """Executa busca Mercado Livre. Retorna (resultados, erros)."""
+    ml_cfg = sources_cfg.get("mercado_livre", {})
+    if not ml_cfg.get("enabled", True):
+        return [], 0
+
+    console.print("[cyan]→ Mercado Livre[/cyan]")
+    if mode == SearchMode.MOCK_ONLY:
+        results: list[RadarResult] = []
+        for card in card_list:
+            results.extend(ml_mock(card))
+        return results, 0
+
+    connector = MercadoLivreConnector(
+        site_id=ml_cfg.get("site_id", "MLB"),
+        category=ml_cfg.get("category", ""),
+    )
+    results = tag_results(
+        connector.search_cards(card_list, limit_per_card=limit),
+        DataMode.LIVE,
+    )
+    if results:
+        return results, 0
+    if mode == SearchMode.LIVE_ONLY:
+        _print_source_error(
+            "Mercado Livre",
+            "API em diagnóstico (403 comum). Use import-prices ou Reddit.",
+        )
+        return [], 1
+    if mode == SearchMode.ALLOW_MOCK:
+        console.print("[yellow]  Mercado Livre vazio — fallback mock[/yellow]")
+        mock_results: list[RadarResult] = []
+        for card in card_list:
+            mock_results.extend(ml_mock(card))
+        return mock_results, 0
+    return [], 0
+
+
+@app.command("setup-env")
+def setup_env() -> None:
+    """Prepara .env a partir de .env.example (edição manual)."""
+    run_setup_env(console)
+
+
+@app.command("test-reddit-auth")
+def test_reddit_auth() -> None:
+    """Testa OAuth Reddit e busca simples — não salva radar_results."""
+    console.print("[bold blue]🔐 Teste de autenticação — Reddit[/bold blue]\n")
+
+    env_status = inspect_reddit_env()
+    if not env_status.env_path_exists:
+        console.print("[yellow].env não encontrado — rode setup-env primeiro.[/yellow]")
+        raise typer.Exit(1)
+
+    table = Table(title="Campos do .env (valores ocultos)")
+    table.add_column("Variável")
+    table.add_column("Preenchido")
+    for field in REDDIT_ENV_FIELDS:
+        filled = env_status.fields.get(field, False)
+        style = "green" if filled else "red"
+        table.add_row(field, f"[{style}]{'sim' if filled else 'não'}[/{style}]")
+    console.print(table)
+    console.print()
+
+    result = test_reddit_auth_and_search("pokemon tcg brasil", limit=5)
+    auth = result.auth_result
+
+    console.print(f"[bold]Modo:[/bold] {auth.auth_mode}")
+    console.print(f"[bold]Status auth:[/bold] {auth.status.value}")
+    console.print(f"[bold]Mensagem:[/bold] {auth.message}")
+
+    if result.status_code is not None:
+        console.print(f"[bold]HTTP busca:[/bold] {result.status_code}")
+    console.print(f"[bold]Resultados:[/bold] {len(result.posts)}")
+
+    if result.posts:
+        console.print("\n[dim]Primeiros posts:[/dim]")
+        for post in result.posts[:3]:
+            console.print(f"  • r/{post.get('subreddit', '?')}: {post.get('title', '')[:60]}")
+
+    if auth.status == RedditAuthStatus.LIVE and result.posts:
+        console.print("\n[green]✓ Reddit OAuth funcionando — pronto para search-reddit[/green]")
+    elif auth.status == RedditAuthStatus.BLOCKED:
+        console.print("\n[yellow]Bloqueado (403) — teste em rede residencial com OAuth configurado[/yellow]")
+    elif auth.status == RedditAuthStatus.MISSING_CREDENTIALS:
+        console.print("\n[yellow]Preencha .env e rode setup-env[/yellow]")
+    else:
+        console.print("\n[yellow]Autenticação ou busca falhou — verifique .env[/yellow]")
+
+    console.print("\n[dim]Nenhum dado salvo em radar_results.[/dim]")
+
+
+@app.command("search-reddit")
+def search_reddit(
+    query: str = typer.Option("pokemon tcg brasil", "--query", "-q"),
+    limit: int = typer.Option(10, "--limit", "-l"),
+) -> None:
+    """Busca apenas no Reddit e salva resultados live."""
+    console.print(f"[bold blue]🔍 Busca Reddit — live[/bold blue]\n")
+    console.print(f"[dim]Query: {query}[/dim]\n")
+
+    connector = RedditConnector(require_oauth=False)
+    console.print(f"[dim]Modo: {connector.auth_mode}[/dim]")
+
+    if not connector.auth_ok:
+        console.print(f"[red]Auth falhou: {connector.auth_result.message}[/red]")
+        console.print("[dim]Rode setup-env e test-reddit-auth[/dim]")
+        raise typer.Exit(1)
+
+    results = tag_results(connector.search_query(query, limit=limit), DataMode.LIVE)
+    if not results:
+        console.print("[yellow]Nenhum resultado live do Reddit.[/yellow]")
+        if connector.auth_result.status == RedditAuthStatus.BLOCKED:
+            console.print("[dim]HTTP 403 — teste em rede residencial[/dim]")
+        raise typer.Exit(1)
+
+    saved = save_results(results)
+    export_to_csv(DEFAULT_CSV, DEFAULT_DB)
+    console.print(f"[green]✓ {saved} resultados live salvos[/green]\n")
+
+    table = Table(show_lines=True)
+    table.add_column("Título", max_width=40)
+    table.add_column("Subreddit")
+    table.add_column("Intenção")
+    table.add_column("Score", justify="right")
+    table.add_column("Data")
+    table.add_column("Link", max_width=30)
+
+    for r in results:
+        date_str = r.published_at.strftime("%Y-%m-%d") if r.published_at else "—"
+        table.add_row(
+            r.title[:40],
+            r.location or "—",
+            r.intent_type.value,
+            str(r.intent_score),
+            date_str,
+            r.url[:30],
+        )
+    console.print(table)
+
+
+@app.command("validate-import")
+def validate_import(
+    file: Path = typer.Argument(..., help="CSV de preços manuais"),
+) -> None:
+    """Valida CSV de importação LigaPokemon/MYP Cards."""
+    console.print(f"[bold blue]📋 Validação de importação[/bold blue]\n{file}\n")
+    result = validate_import_file(file)
+
+    if result.valid:
+        console.print(f"[green]✓ CSV válido — {result.row_count} linha(s)[/green]")
+        raise typer.Exit(0)
+
+    console.print(f"[red]✗ {len(result.errors)} erro(s) encontrado(s):[/red]\n")
+    for err in result.errors:
+        loc = f"Linha {err.row}" if err.row else "Arquivo"
+        col = f" [{err.column}]" if err.column else ""
+        console.print(f"  • {loc}{col}: {err.message}")
+    raise typer.Exit(1)
+
+
+@app.command("import-prices")
+def import_prices(
+    file: Path = typer.Argument(..., help="CSV de preços manuais"),
+) -> None:
+    """Importa preços manuais (data_mode=manual_import)."""
+    console.print(f"[bold blue]📥 Importação de preços[/bold blue]\n{file}\n")
+
+    validation = validate_import_file(file)
+    if not validation.valid:
+        console.print("[red]CSV inválido — rode validate-import primeiro.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        results = import_prices_from_csv(file)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not results:
+        console.print("[yellow]Nenhuma linha importada.[/yellow]")
+        raise typer.Exit(1)
+
+    saved = save_results(results)
+    export_to_csv(DEFAULT_CSV, DEFAULT_DB)
+    console.print(f"[green]✓ {saved} registro(s) manual_import salvos[/green]")
+    console.print("[dim]Use market-snapshot para ver visão consolidada.[/dim]")
+
+
+@app.command("market-snapshot")
+def market_snapshot() -> None:
+    """Snapshot de mercado com dados live + manual_import (sem mock)."""
+    display_market_snapshot(console)
+
+
 @app.command()
 def search(
     cards: Path = typer.Option(DEFAULT_CARDS, "--cards", "-c"),
-    sources: Path = typer.Option(DEFAULT_SOURCES, "--sources", "-s"),
+    sources_config: Path = typer.Option(DEFAULT_SOURCES, "--sources-config"),
+    sources: str = typer.Option(
+        "",
+        "--sources",
+        help="Fontes: reddit, mercado_livre, youtube (ex: reddit ou mercado_livre,reddit)",
+    ),
     limit: int = typer.Option(20, "--limit", "-l"),
-    live_only: bool = typer.Option(False, "--live-only", help="Apenas dados reais; sem mock."),
-    allow_mock: bool = typer.Option(False, "--allow-mock", help="Permite fallback mock (padrão)."),
-    mock_only: bool = typer.Option(False, "--mock-only", help="Apenas dados simulados."),
+    live_only: bool = typer.Option(False, "--live-only"),
+    allow_mock: bool = typer.Option(False, "--allow-mock"),
+    mock_only: bool = typer.Option(False, "--mock-only"),
 ) -> None:
     """Executa busca nas fontes públicas configuradas."""
     try:
@@ -89,8 +373,11 @@ def search(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    selected = parse_source_filter(sources)
+    source_label = ", ".join(sorted(selected)) if selected else "todas"
     console.print(
         f"[bold blue]🔍 Radar Pokémon Brasil — busca ({mode.value})[/bold blue]\n"
+        f"[dim]Fontes: {source_label}[/dim]\n"
     )
 
     card_list = load_cards(cards)
@@ -98,69 +385,25 @@ def search(
         console.print(f"[red]Nenhuma carta em {cards}[/red]")
         raise typer.Exit(1)
 
-    sources_cfg = load_sources_config(sources)
-    all_results: list = []
+    sources_cfg = load_sources_config(sources_config)
+    all_results: list[RadarResult] = []
     source_errors = 0
 
-    reddit_cfg = sources_cfg.get("reddit", {})
-    if reddit_cfg.get("enabled", True):
-        console.print("[cyan]→ Reddit[/cyan]")
-        if mode == SearchMode.MOCK_ONLY:
-            for card in card_list:
-                all_results.extend(reddit_mock(card))
-        else:
-            connector = RedditConnector(
-                subreddits=reddit_cfg.get("subreddits"),
-                query_suffix=reddit_cfg.get("query_suffix", "pokemon card"),
-            )
-            mode_label = "OAuth" if connector.uses_oauth else "público"
-            console.print(f"[dim]  Modo Reddit: {mode_label}[/dim]")
-            results = tag_results(
-                connector.search_cards(card_list, limit_per_card=limit),
-                DataMode.LIVE,
-            )
-            if results:
-                all_results.extend(results)
-            elif mode == SearchMode.LIVE_ONLY:
-                source_errors += 1
-                _print_source_error("Reddit", "Configure REDDIT_USER_AGENT ou OAuth no .env")
-            elif mode == SearchMode.ALLOW_MOCK:
-                console.print("[yellow]  Reddit vazio — fallback mock[/yellow]")
-                for card in card_list:
-                    all_results.extend(reddit_mock(card))
+    if _source_enabled(selected, "reddit"):
+        results, errors = _run_reddit_search(card_list, sources_cfg, limit, mode)
+        all_results.extend(results)
+        source_errors += errors
 
-    ml_cfg = sources_cfg.get("mercado_livre", {})
-    if ml_cfg.get("enabled", True):
-        console.print("[cyan]→ Mercado Livre[/cyan]")
-        if mode == SearchMode.MOCK_ONLY:
-            for card in card_list:
-                all_results.extend(ml_mock(card))
-        else:
-            connector = MercadoLivreConnector(
-                site_id=ml_cfg.get("site_id", "MLB"),
-                category=ml_cfg.get("category", ""),
-            )
-            results = tag_results(
-                connector.search_cards(card_list, limit_per_card=limit),
-                DataMode.LIVE,
-            )
-            if results:
-                all_results.extend(results)
-            elif mode == SearchMode.LIVE_ONLY:
-                source_errors += 1
-                _print_source_error(
-                    "Mercado Livre",
-                    "Rode test-mercadolivre ou doctor; teste em rede residencial.",
-                )
-            elif mode == SearchMode.ALLOW_MOCK:
-                console.print("[yellow]  Mercado Livre vazio — fallback mock[/yellow]")
-                for card in card_list:
-                    all_results.extend(ml_mock(card))
+    if _source_enabled(selected, "mercado_livre"):
+        results, errors = _run_ml_search(card_list, sources_cfg, limit, mode)
+        all_results.extend(results)
+        source_errors += errors
 
-    if sources_cfg.get("youtube", {}).get("enabled", False) and mode != SearchMode.MOCK_ONLY:
+    yt_cfg = sources_cfg.get("youtube", {})
+    if _source_enabled(selected, "youtube") and yt_cfg.get("enabled", False) and mode != SearchMode.MOCK_ONLY:
         console.print("[cyan]→ YouTube[/cyan]")
         connector = YouTubeConnector(
-            max_comments_per_video=sources_cfg["youtube"].get("max_comments_per_video", 20),
+            max_comments_per_video=yt_cfg.get("max_comments_per_video", 20),
         )
         if connector.is_available():
             all_results.extend(
@@ -175,9 +418,9 @@ def search(
         console.print(
             Panel(
                 "[red]Nenhum resultado coletado.[/red]\n\n"
-                "  • [bold]doctor[/bold] — diagnóstico geral\n"
-                "  • [bold]search --mock-only[/bold] — demonstração\n"
-                "  • [bold]search --live-only[/bold] — validação real",
+                "  • [bold]setup-env[/bold] + [bold]test-reddit-auth[/bold]\n"
+                "  • [bold]import-prices[/bold] para dados manuais\n"
+                "  • [bold]search --mock-only[/bold] — demonstração",
                 border_style="red",
                 title="Busca sem resultados",
             )
@@ -212,7 +455,7 @@ def report(
 ) -> None:
     """Relatório de inteligência de mercado."""
     if not DEFAULT_DB.exists() or not fetch_all(DEFAULT_DB):
-        console.print("[yellow]Sem dados. Rode search ou doctor primeiro.[/yellow]")
+        console.print("[yellow]Sem dados. Rode search, search-reddit ou import-prices.[/yellow]")
         raise typer.Exit(0)
     console.print("[bold blue]📊 Relatório — Radar Pokémon Brasil[/bold blue]\n")
     display_market_report(console, fetch_all(DEFAULT_DB), load_cards(cards), top_signals=top)
@@ -291,7 +534,7 @@ def test_mercadolivre(
     console.print(f"[dim]{diag.response_preview[:500]}[/dim]\n")
     for tip in diag.suggestions:
         console.print(f"  • {tip}")
-    console.print("\n[dim]Salvo em connector_health (não grava radar_results).[/dim]")
+    console.print("\n[dim]Salvo em connector_health (modo diagnóstico).[/dim]")
 
 
 @app.command("test-reddit")
@@ -305,6 +548,7 @@ def test_reddit(
     save_health_check(health)
 
     console.print(f"[bold]Método:[/bold] {diag.method} | [bold]Modo:[/bold] {diag.auth_mode}")
+    console.print(f"[bold]Auth status:[/bold] {diag.auth_status}")
     console.print(f"[bold]URL:[/bold]\n{diag.url}\n")
     console.print(f"[bold]Status:[/bold] {diag.status_code}")
     console.print(f"[bold]OAuth necessário?[/bold] {'sim' if diag.needs_oauth else 'não'}")
@@ -312,7 +556,7 @@ def test_reddit(
     console.print(f"[dim]{diag.response_preview[:500]}[/dim]\n")
     for tip in diag.suggestions:
         console.print(f"  • {tip}")
-    console.print("\n[dim]Salvo em connector_health (não grava radar_results).[/dim]")
+    console.print("\n[dim]Salvo em connector_health.[/dim]")
 
 
 def main() -> None:
