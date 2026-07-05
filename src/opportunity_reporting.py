@@ -9,13 +9,19 @@ from rich.panel import Panel
 from rich.table import Table
 
 from src.opportunity_db import (
+    count_domains_by_review,
+    count_human_reviews,
     count_opportunities_by_source,
     count_rejected_by_reason,
     count_rejected_domains,
     count_rejected_results,
     count_saved_domains,
+    count_types_by_review,
+    count_unreviewed_opportunities,
+    fetch_false_positives,
     fetch_opportunities,
     fetch_rejected_results,
+    fetch_reviewed_opportunities,
     fetch_wishlist_leads,
 )
 from src.opportunity_models import Opportunity, OpportunityType
@@ -32,7 +38,17 @@ def _action_style(score: int) -> str:
 
 
 def _domain_from_opp(opp: Opportunity) -> str:
-    return extract_domain(opp.url) if opp.url else opp.platform
+    return opp.domain or (extract_domain(opp.url) if opp.url else opp.platform)
+
+
+def _review_label(review: str) -> str:
+    if review == "relevant":
+        return "[green]relevant[/green]"
+    if review == "irrelevant":
+        return "[red]irrelevant[/red]"
+    if review == "maybe":
+        return "[yellow]maybe[/yellow]"
+    return "[dim]—[/dim]"
 
 
 def display_opportunity_inbox(console: Console, limit: int = 15) -> None:
@@ -50,26 +66,30 @@ def display_opportunity_inbox(console: Console, limit: int = 15) -> None:
         return
 
     table = Table(show_lines=True)
-    table.add_column("Tipo")
+    table.add_column("ID", justify="right")
     table.add_column("Carta", style="bold")
+    table.add_column("Tipo")
     table.add_column("Score", justify="right")
     table.add_column("Conf.", justify="right")
-    table.add_column("Fonte/domínio", max_width=22)
-    table.add_column("why_saved", max_width=30)
-    table.add_column("Evidência", max_width=28)
-    table.add_column("URL", max_width=24)
+    table.add_column("Domínio", max_width=20)
+    table.add_column("why_saved", max_width=24)
+    table.add_column("Revisão", max_width=12)
+    table.add_column("Evidência", max_width=24)
+    table.add_column("URL", max_width=22)
 
-    for opp in opps:
+    for i, opp in enumerate(opps, 1):
         style = _action_style(opp.opportunity_score)
         table.add_row(
-            opp.opportunity_type.value,
+            str(i),
             opp.normalized_card_name,
+            opp.opportunity_type.value,
             f"[{style}]{opp.opportunity_score}[/{style}]",
             str(opp.confidence_score),
-            f"{opp.source}\n{_domain_from_opp(opp)}"[:22],
-            (opp.why_saved or "—")[:30],
-            opp.evidence_text[:28],
-            (opp.url or "—")[:24],
+            _domain_from_opp(opp)[:20],
+            (opp.why_saved or "—")[:24],
+            _review_label(opp.human_review),
+            opp.evidence_text[:24],
+            (opp.url or "—")[:22],
         )
     console.print(table)
 
@@ -216,6 +236,128 @@ def display_rejected_report(console: Console, limit: int = 10) -> None:
         console.print(table)
 
 
+def display_review_opportunities(console: Console, limit: int = 50) -> None:
+    """Lista oportunidades para revisão manual humana."""
+    opps = fetch_opportunities(limit=limit)
+    console.print("[bold blue]🔍 Review Opportunities — revisão manual[/bold blue]\n")
+
+    if not opps:
+        console.print(
+            Panel(
+                "Nenhuma oportunidade. Rode scan-quality-test ou scan-opportunities primeiro.",
+                border_style="yellow",
+            )
+        )
+        return
+
+    console.print(
+        "[dim]Use mark-opportunity --id N --review relevant|irrelevant|maybe "
+        "(N = ID da tabela abaixo)[/dim]\n"
+    )
+
+    table = Table(show_lines=True)
+    table.add_column("ID", justify="right")
+    table.add_column("Carta", style="bold")
+    table.add_column("Tipo")
+    table.add_column("Score", justify="right")
+    table.add_column("Conf.", justify="right")
+    table.add_column("Domínio", max_width=18)
+    table.add_column("Revisão")
+    table.add_column("Evidência", max_width=30)
+    table.add_column("URL", max_width=24)
+
+    for i, opp in enumerate(opps, 1):
+        table.add_row(
+            str(i),
+            opp.normalized_card_name,
+            opp.opportunity_type.value,
+            str(opp.opportunity_score),
+            str(opp.confidence_score),
+            _domain_from_opp(opp)[:18],
+            opp.human_review or "—",
+            opp.evidence_text[:30],
+            (opp.url or "—")[:24],
+        )
+    console.print(table)
+
+    unreviewed = count_unreviewed_opportunities()
+    reviewed_count = len(fetch_reviewed_opportunities())
+    console.print(
+        f"\n[dim]Sem revisão: {unreviewed} | Revisadas: {reviewed_count}[/dim]"
+    )
+
+
+def display_precision_report(console: Console) -> None:
+    """Relatório de precisão baseado em revisão humana."""
+    reviews = count_human_reviews()
+    total_reviewed = sum(reviews.values())
+    relevant = reviews.get("relevant", 0)
+    irrelevant = reviews.get("irrelevant", 0)
+    maybe = reviews.get("maybe", 0)
+    precision = (relevant / total_reviewed * 100) if total_reviewed else 0.0
+
+    console.print("[bold blue]🎯 Precision Report — revisão humana[/bold blue]\n")
+
+    if total_reviewed == 0:
+        console.print(
+            Panel(
+                "Nenhuma oportunidade revisada ainda.\n\n"
+                "  • python -m src.main review-opportunities\n"
+                "  • python -m src.main mark-opportunity --id 1 --review relevant",
+                border_style="yellow",
+                title="Sem dados de revisão",
+            )
+        )
+        return
+
+    console.print(Panel(
+        f"[bold]Total revisado:[/bold] {total_reviewed}\n"
+        f"[bold]Relevantes:[/bold] {relevant}\n"
+        f"[bold]Irrelevantes:[/bold] {irrelevant}\n"
+        f"[bold]Talvez:[/bold] {maybe}\n"
+        f"[bold]Precisão estimada:[/bold] {precision:.1f}% (relevantes / revisados)",
+        title="Resumo de precisão",
+        border_style="blue",
+    ))
+
+    good_domains = count_domains_by_review("relevant")
+    if good_domains:
+        console.print("\n[bold green]Domínios com mais relevantes[/bold green]")
+        for domain, cnt in list(good_domains.items())[:8]:
+            console.print(f"  • {domain}: {cnt}")
+
+    bad_domains = count_domains_by_review("irrelevant")
+    if bad_domains:
+        console.print("\n[bold red]Domínios com mais irrelevantes[/bold red]")
+        for domain, cnt in list(bad_domains.items())[:8]:
+            console.print(f"  • {domain}: {cnt}")
+
+    irrelevant_types = count_types_by_review("irrelevant")
+    if irrelevant_types:
+        console.print("\n[bold]Tipos de oportunidade com mais erro[/bold]")
+        for opp_type, cnt in list(irrelevant_types.items())[:8]:
+            console.print(f"  • {opp_type}: {cnt}")
+
+    false_positives = fetch_false_positives(limit=5)
+    if false_positives:
+        console.print("\n[bold]Exemplos de falsos positivos[/bold]\n")
+        fp_table = Table(show_lines=True)
+        fp_table.add_column("Carta")
+        fp_table.add_column("Tipo")
+        fp_table.add_column("Score", justify="right")
+        fp_table.add_column("Domínio", max_width=18)
+        fp_table.add_column("Evidência", max_width=30)
+        for opp in false_positives:
+            fp_table.add_row(
+                opp.normalized_card_name,
+                opp.opportunity_type.value,
+                str(opp.opportunity_score),
+                _domain_from_opp(opp)[:18],
+                opp.evidence_text[:30],
+            )
+        console.print(fp_table)
+
+
 def display_quality_report(console: Console) -> None:
     """Relatório de qualidade — aproveitamento e recomendações."""
     opps = fetch_opportunities()
@@ -224,12 +366,25 @@ def display_quality_report(console: Console) -> None:
     total_evaluated = saved + rejected
     rate = (saved / total_evaluated * 100) if total_evaluated else 0.0
 
+    reviews = count_human_reviews()
+    total_reviewed = sum(reviews.values())
+    relevant = reviews.get("relevant", 0)
+    unreviewed = count_unreviewed_opportunities()
+    precision = (relevant / total_reviewed * 100) if total_reviewed else None
+
     console.print("[bold blue]✅ Quality Report — Opportunity Radar[/bold blue]\n")
 
-    console.print(Panel(
-        f"[bold]Oportunidades salvas:[/bold] {saved}\n"
-        f"[bold]Resultados rejeitados:[/bold] {rejected}\n"
+    panel_lines = [
+        f"[bold]Oportunidades salvas:[/bold] {saved}",
+        f"[bold]Resultados rejeitados:[/bold] {rejected}",
         f"[bold]Taxa de aproveitamento:[/bold] {rate:.1f}%",
+        f"[bold]Sem revisão humana:[/bold] {unreviewed}",
+        f"[bold]Revisadas:[/bold] {total_reviewed}",
+    ]
+    if precision is not None:
+        panel_lines.append(f"[bold]Precisão estimada (humana):[/bold] {precision:.1f}%")
+    console.print(Panel(
+        "\n".join(panel_lines),
         title="Resumo de qualidade",
         border_style="blue",
     ))
@@ -246,6 +401,18 @@ def display_quality_report(console: Console) -> None:
         for domain, cnt in list(rejected_domains.items())[:8]:
             console.print(f"  • {domain}: {cnt}")
 
+    good_domains = count_domains_by_review("relevant")
+    if good_domains:
+        console.print("\n[bold green]Domínios bons (relevantes na revisão)[/bold green]")
+        for domain, cnt in list(good_domains.items())[:5]:
+            console.print(f"  • {domain}: {cnt}")
+
+    bad_domains = count_domains_by_review("irrelevant")
+    if bad_domains:
+        console.print("\n[bold red]Domínios ruins (irrelevantes na revisão)[/bold red]")
+        for domain, cnt in list(bad_domains.items())[:5]:
+            console.print(f"  • {domain}: {cnt}")
+
     low_conf = [o for o in opps if o.confidence_score < 70]
     if low_conf:
         console.print(f"\n[bold yellow]Oportunidades com confidence < 70:[/bold yellow] {len(low_conf)}")
@@ -259,6 +426,10 @@ def display_quality_report(console: Console) -> None:
     recommendations: list[str] = []
     if rate < 30 and rejected > 0:
         recommendations.append("Use --strict --buyer-only para focar em demanda real de compra.")
+    if total_reviewed > 0 and precision is not None and precision < 50:
+        recommendations.append(
+            "Precisão humana baixa — revise falsos positivos com precision-report e ajuste filtros."
+        )
     if rate > 60:
         recommendations.append("Taxa alta — considere ampliar watchlist com --max-queries.")
     if any("dicio" in d for d in rejected_domains):

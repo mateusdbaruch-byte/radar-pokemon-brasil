@@ -34,6 +34,12 @@ class OpportunityStatus(str, Enum):
     DISMISSED = "dismissed"
 
 
+class HumanReview(str, Enum):
+    RELEVANT = "relevant"
+    IRRELEVANT = "irrelevant"
+    MAYBE = "maybe"
+
+
 class Opportunity(BaseModel):
     """Oportunidade detectada pelo radar."""
 
@@ -65,6 +71,10 @@ class Opportunity(BaseModel):
     language_detected: str = ""
     market_jargon_detected: str = ""
     negative_context_detected: str = ""
+    domain: str = ""
+    human_review: str = ""
+    human_review_notes: str = ""
+    reviewed_at: Optional[datetime] = None
 
     def to_db_row(self) -> dict[str, Any]:
         return {
@@ -96,6 +106,10 @@ class Opportunity(BaseModel):
             "language_detected": self.language_detected,
             "market_jargon_detected": self.market_jargon_detected,
             "negative_context_detected": self.negative_context_detected,
+            "domain": self.domain,
+            "human_review": self.human_review,
+            "human_review_notes": self.human_review_notes,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
         }
 
     @classmethod
@@ -134,6 +148,14 @@ class Opportunity(BaseModel):
             language_detected=row.get("language_detected") or "",
             market_jargon_detected=row.get("market_jargon_detected") or "",
             negative_context_detected=row.get("negative_context_detected") or "",
+            domain=row.get("domain") or "",
+            human_review=row.get("human_review") or "",
+            human_review_notes=row.get("human_review_notes") or "",
+            reviewed_at=(
+                datetime.fromisoformat(row["reviewed_at"])
+                if row.get("reviewed_at")
+                else None
+            ),
         )
 
     def set_raw_data(self, data: Any) -> None:

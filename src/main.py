@@ -48,15 +48,26 @@ from src.paths import (
     DEFAULT_DB,
     DEFAULT_SOURCES,
     DEFAULT_WATCHLIST,
+    DATA_DIR,
     PROJECT_ROOT,
 )
-from src.opportunity_db import save_opportunities
-from src.opportunity_models import WishlistLead
+from src.opportunity_db import (
+    count_rejected_results,
+    count_rejected_domains,
+    count_saved_domains,
+    export_review_csv,
+    mark_opportunity_review,
+    resolve_opportunity_index,
+    save_opportunities,
+)
+from src.opportunity_models import HumanReview, WishlistLead
 from src.opportunity_reporting import (
     display_opportunity_inbox,
     display_opportunity_report,
+    display_precision_report,
     display_quality_report,
     display_rejected_report,
+    display_review_opportunities,
 )
 from src.opportunity_scanner import scan_opportunities
 from src.opportunity_db import save_wishlist_lead
@@ -297,6 +308,139 @@ def reddit_policy_status() -> None:
 
 def load_watchlist(path: Path) -> list[str]:
     return load_yaml(path).get("cards", [])
+
+
+def parse_card_list(cards_arg: str) -> list[str]:
+    """Aceita lista separada por vírgula ou caminho YAML."""
+    raw = cards_arg.strip()
+    if not raw:
+        return []
+    if "," in raw and not raw.endswith(".yml") and not raw.endswith(".yaml"):
+        return [c.strip() for c in raw.split(",") if c.strip()]
+    path = Path(raw)
+    if path.exists():
+        return load_watchlist(path)
+    return [raw]
+
+
+def _print_quality_test_summary(
+    card_list: list[str],
+    result,
+    *,
+    saved: int,
+    merged: int,
+    elapsed: float,
+) -> None:
+    rejected = count_rejected_results()
+    total_evaluated = saved + merged + rejected
+    rate = ((saved + merged) / total_evaluated * 100) if total_evaluated else 0.0
+    saved_domains = count_saved_domains()
+    rejected_domains = count_rejected_domains()
+
+    console.print("\n[bold]Resumo do teste de qualidade[/bold]")
+    console.print(f"  Cartas testadas: {', '.join(card_list)}")
+    ws = result.web_search_stats
+    if ws:
+        console.print(
+            f"  Queries executadas: {ws.queries_executed}/{ws.queries_planned}"
+        )
+    console.print(f"  Oportunidades salvas: {saved + merged}")
+    console.print(f"  Resultados rejeitados: {rejected}")
+    if saved_domains:
+        console.print(
+            f"  Domínios salvos: {', '.join(f'{d}({c})' for d, c in list(saved_domains.items())[:6])}"
+        )
+    else:
+        console.print("  Domínios salvos: —")
+    if rejected_domains:
+        console.print(
+            f"  Domínios rejeitados: {', '.join(f'{d}({c})' for d, c in list(rejected_domains.items())[:6])}"
+        )
+    else:
+        console.print("  Domínios rejeitados: —")
+    console.print(f"  Taxa de aproveitamento: {rate:.1f}%")
+    console.print(f"  Tempo total: {elapsed:.1f}s")
+
+
+@app.command("scan-quality-test")
+def scan_quality_test_cmd(
+    cards: str = typer.Option(
+        "Charizard,Umbreon,Mew",
+        "--cards",
+        "-c",
+        help="Cartas separadas por vírgula ou caminho YAML",
+    ),
+    mode: ScanMode = typer.Option(ScanMode.LIGHT, "--mode", "-m"),
+    strict: bool = typer.Option(True, "--strict/--no-strict"),
+    buyer_only: bool = typer.Option(True, "--buyer-only/--no-buyer-only"),
+    limit: int = typer.Option(5, "--limit", "-l"),
+    max_queries: int = typer.Option(0, "--max-queries"),
+) -> None:
+    """Teste de qualidade — scan web_search com strict e buyer-only para medir precisão."""
+    card_list = parse_card_list(cards)
+    if not card_list:
+        console.print("[red]Informe cartas com --cards Charizard,Umbreon,Mew[/red]")
+        raise typer.Exit(1)
+
+    query_cap = max_queries if max_queries > 0 else None
+    scan_start = time.monotonic()
+
+    console.print(
+        f"[bold blue]🧪 Scan Quality Test — validação de precisão[/bold blue]\n"
+        f"[dim]Cartas: {', '.join(card_list)} | web_search only | "
+        f"strict={strict} | buyer-only={buyer_only} | limit={limit}[/dim]\n"
+    )
+
+    def _on_web_progress(
+        query_result: WebSearchQueryResult,
+        current: int,
+        total: int,
+    ) -> None:
+        status = "[green]OK[/green]" if query_result.success else "[red]falha[/red]"
+        if query_result.timed_out:
+            status = "[yellow]timeout[/yellow]"
+        console.print(
+            f"[cyan]  [{current}/{total}][/cyan] {query_result.query[:70]}"
+            f" → {len(query_result.hits)} hit(s) | {status}"
+            f" | {query_result.elapsed_seconds:.1f}s"
+        )
+
+    result = scan_opportunities(
+        card_list,
+        "web_search",
+        limit=limit,
+        mode=mode,
+        max_queries=query_cap,
+        on_web_search_progress=_on_web_progress,
+        strict=strict,
+        buyer_only=buyer_only,
+        seller_only=False,
+    )
+
+    elapsed = time.monotonic() - scan_start
+    saved = merged = 0
+
+    if result.opportunities:
+        save_result = save_opportunities(result.opportunities)
+        saved = save_result.saved
+        merged = save_result.merged
+        console.print(f"\n[green]✓ {saved + merged} oportunidades salvas (live)[/green]")
+    else:
+        console.print("\n[yellow]Nenhuma oportunidade salva neste teste.[/yellow]")
+
+    for msg in result.messages:
+        console.print(f"[dim]  • {msg}[/dim]")
+
+    _print_quality_test_summary(
+        card_list,
+        result,
+        saved=saved,
+        merged=merged,
+        elapsed=elapsed,
+    )
+    console.print(
+        "\n[dim]Próximo passo: opportunity-inbox → mark-opportunity → precision-report[/dim]"
+    )
 
 
 @app.command("scan-opportunities")
@@ -582,6 +726,61 @@ def rejected_report_cmd(
 def quality_report_cmd() -> None:
     """Relatório de qualidade — aproveitamento e recomendações."""
     display_quality_report(console)
+
+
+@app.command("review-opportunities")
+def review_opportunities_cmd(
+    limit: int = typer.Option(50, "--limit", "-n"),
+) -> None:
+    """Lista oportunidades para revisão manual humana."""
+    display_review_opportunities(console, limit=limit)
+
+
+@app.command("mark-opportunity")
+def mark_opportunity_cmd(
+    opp_id: int = typer.Option(..., "--id", help="ID 1-based (como em opportunity-inbox)"),
+    review: HumanReview = typer.Option(..., "--review", help="relevant, irrelevant ou maybe"),
+    notes: str = typer.Option("", "--notes", help="Notas opcionais da revisão"),
+) -> None:
+    """Marca oportunidade com revisão humana."""
+    opp = resolve_opportunity_index(opp_id)
+    if not opp:
+        console.print(f"[red]Oportunidade #{opp_id} não encontrada.[/red]")
+        raise typer.Exit(1)
+
+    ok = mark_opportunity_review(opp.id, review.value, notes)
+    if not ok:
+        console.print("[red]Falha ao salvar revisão.[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]✓ Oportunidade #{opp_id} marcada como {review.value}[/green]\n"
+        f"[dim]Carta: {opp.normalized_card_name} | "
+        f"Tipo: {opp.opportunity_type.value} | "
+        f"Domínio: {opp.domain or '—'}[/dim]"
+    )
+    if notes:
+        console.print(f"[dim]Notas: {notes}[/dim]")
+
+
+@app.command("precision-report")
+def precision_report_cmd() -> None:
+    """Relatório de precisão baseado em revisão humana."""
+    display_precision_report(console)
+
+
+@app.command("export-review-csv")
+def export_review_csv_cmd(
+    output: Path = typer.Option(
+        DATA_DIR / "opportunity_review.csv",
+        "--output",
+        "-o",
+        help="Caminho do CSV de exportação",
+    ),
+) -> None:
+    """Exporta oportunidades com revisão para CSV."""
+    count = export_review_csv(output)
+    console.print(f"[green]✓ {count} oportunidade(s) exportadas para {output}[/green]")
 
 
 @app.command("web-search-test")

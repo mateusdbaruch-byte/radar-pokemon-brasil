@@ -43,6 +43,31 @@ python3 -m src.main quality-report
 Filtros de qualidade: `config/blocked_domains.yml`, `config/priority_domains.yml`.  
 Modos: `--strict`, `--buyer-only`, `--seller-only`.
 
+### Fluxo de validação de qualidade (revisão humana)
+
+Mede se as oportunidades do `web_search` são realmente úteis — prioridade em **precisão**, não volume.
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main scan-quality-test --cards Charizard,Umbreon,Mew --mode light --strict --buyer-only --limit 5
+python3 -m src.main opportunity-inbox
+python3 -m src.main mark-opportunity --id 1 --review relevant
+python3 -m src.main mark-opportunity --id 2 --review irrelevant
+python3 -m src.main precision-report
+python3 -m src.main quality-report
+python3 -m src.main export-review-csv
+```
+
+Comandos de revisão:
+
+| Comando | Descrição |
+|---------|-----------|
+| `scan-quality-test` | Scan web_search only com strict + buyer-only; salva live e rejeitados |
+| `review-opportunities` | Lista oportunidades para revisão manual |
+| `mark-opportunity --id N --review relevant\|irrelevant\|maybe` | Marca revisão humana (N = ID do inbox) |
+| `precision-report` | Precisão estimada, domínios bons/ruins, falsos positivos |
+| `export-review-csv` | Exporta `data/opportunity_review.csv` |
+
 ### Scan leve (recomendado para começar)
 
 ```bash
@@ -409,7 +434,14 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main expand-queries --card Charizard` | Preview das queries enriquecidas |
 | `python3 -m src.main classify-text "..."` | Classifica texto com TCG Knowledge Layer |
 | `python3 -m src.main web-search-test` | Testa uma query web_search |
+| `python3 -m src.main scan-quality-test` | Teste de qualidade (web_search, strict, buyer-only) |
 | `python3 -m src.main opportunity-inbox` | Caixa de entrada de oportunidades |
+| `python3 -m src.main review-opportunities` | Lista para revisão manual |
+| `python3 -m src.main mark-opportunity --id N --review relevant` | Marca revisão humana |
+| `python3 -m src.main precision-report` | Precisão estimada da revisão humana |
+| `python3 -m src.main export-review-csv` | Exporta `data/opportunity_review.csv` |
+| `python3 -m src.main quality-report` | Relatório de qualidade e aproveitamento |
+| `python3 -m src.main rejected-report` | Relatório de resultados rejeitados |
 | `python3 -m src.main opportunity-report` | Relatório consolidado |
 | `python3 -m src.main add-wishlist-lead` | Cadastra lead opt-in |
 | `python3 -m src.main import-wishlist` | Importa CSV de wishlist |

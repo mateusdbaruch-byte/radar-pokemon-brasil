@@ -108,6 +108,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "language_detected": "TEXT DEFAULT ''",
         "market_jargon_detected": "TEXT DEFAULT ''",
         "negative_context_detected": "TEXT DEFAULT ''",
+        "domain": "TEXT DEFAULT ''",
+        "human_review": "TEXT DEFAULT ''",
+        "human_review_notes": "TEXT DEFAULT ''",
+        "reviewed_at": "TEXT",
     }
     for col, typedef in new_cols.items():
         if col not in cols:
@@ -200,6 +204,12 @@ def _merge_opportunity(existing: Opportunity, incoming: Opportunity) -> Opportun
     return base
 
 
+def _ensure_domain(opp: Opportunity) -> Opportunity:
+    if not opp.domain and opp.url:
+        opp.domain = extract_domain(opp.url)
+    return opp
+
+
 def save_opportunity(
     opp: Opportunity,
     db_path: Path | str = DEFAULT_DB,
@@ -207,6 +217,7 @@ def save_opportunity(
     deduplicate_urls: bool = True,
 ) -> str:
     """Salva oportunidade. Retorna 'saved', 'merged' ou 'skipped'."""
+    opp = _ensure_domain(opp)
     if deduplicate_urls and opp.url:
         existing = fetch_opportunity_by_url(opp.url, db_path)
         if existing:
@@ -287,6 +298,212 @@ def fetch_opportunities(
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [Opportunity.from_db_row(dict(r)) for r in rows]
+
+
+def fetch_opportunity_by_id(
+    opp_id: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> Opportunity | None:
+    conn = _conn(db_path)
+    row = conn.execute(
+        "SELECT * FROM opportunities WHERE id = ?",
+        (opp_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return Opportunity.from_db_row(dict(row))
+
+
+def resolve_opportunity_index(
+    index: int,
+    db_path: Path | str = DEFAULT_DB,
+) -> Opportunity | None:
+    """Resolve índice 1-based na lista ordenada por score (como opportunity-inbox)."""
+    if index < 1:
+        return None
+    opps = fetch_opportunities(db_path)
+    if index > len(opps):
+        return None
+    return opps[index - 1]
+
+
+def mark_opportunity_review(
+    opp_id: str,
+    review: str,
+    notes: str = "",
+    db_path: Path | str = DEFAULT_DB,
+) -> bool:
+    conn = _conn(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """
+        UPDATE opportunities
+        SET human_review = ?, human_review_notes = ?, reviewed_at = ?, status = 'reviewed'
+        WHERE id = ?
+        """,
+        (review, notes, now, opp_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def count_human_reviews(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT human_review, COUNT(*) as cnt
+        FROM opportunities
+        WHERE human_review IS NOT NULL AND human_review != ''
+        GROUP BY human_review
+        """
+    ).fetchall()
+    conn.close()
+    return {r["human_review"]: r["cnt"] for r in rows}
+
+
+def count_unreviewed_opportunities(db_path: Path | str = DEFAULT_DB) -> int:
+    conn = _conn(db_path)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) as cnt FROM opportunities
+        WHERE human_review IS NULL OR human_review = ''
+        """
+    ).fetchone()
+    conn.close()
+    return int(row["cnt"]) if row else 0
+
+
+def fetch_reviewed_opportunities(
+    db_path: Path | str = DEFAULT_DB,
+) -> list[Opportunity]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT * FROM opportunities
+        WHERE human_review IS NOT NULL AND human_review != ''
+        ORDER BY reviewed_at DESC
+        """
+    ).fetchall()
+    conn.close()
+    return [Opportunity.from_db_row(dict(r)) for r in rows]
+
+
+def count_domains_by_review(
+    review: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT domain, url FROM opportunities
+        WHERE human_review = ?
+        """,
+        (review,),
+    ).fetchall()
+    conn.close()
+    counts: dict[str, int] = {}
+    for row in rows:
+        domain = row["domain"] or extract_domain(row["url"] or "")
+        if domain:
+            counts[domain] = counts.get(domain, 0) + 1
+    return dict(sorted(counts.items(), key=lambda x: -x[1]))
+
+
+def count_types_by_review(
+    review: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT opportunity_type, COUNT(*) as cnt
+        FROM opportunities
+        WHERE human_review = ?
+        GROUP BY opportunity_type
+        ORDER BY cnt DESC
+        """,
+        (review,),
+    ).fetchall()
+    conn.close()
+    return {r["opportunity_type"]: r["cnt"] for r in rows}
+
+
+def fetch_false_positives(
+    limit: int = 5,
+    db_path: Path | str = DEFAULT_DB,
+) -> list[Opportunity]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT * FROM opportunities
+        WHERE human_review = 'irrelevant'
+        ORDER BY opportunity_score DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [Opportunity.from_db_row(dict(r)) for r in rows]
+
+
+def export_review_csv(
+    output_path: Path | str,
+    db_path: Path | str = DEFAULT_DB,
+) -> int:
+    import csv
+
+    opps = fetch_opportunities(db_path)
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "id",
+        "card",
+        "opportunity_type",
+        "score",
+        "confidence",
+        "source",
+        "domain",
+        "evidence_text",
+        "url",
+        "why_saved",
+        "human_review",
+        "human_review_notes",
+    ]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for i, opp in enumerate(opps, 1):
+            writer.writerow({
+                "id": i,
+                "card": opp.normalized_card_name,
+                "opportunity_type": opp.opportunity_type.value,
+                "score": opp.opportunity_score,
+                "confidence": opp.confidence_score,
+                "source": opp.source,
+                "domain": opp.domain or extract_domain(opp.url),
+                "evidence_text": opp.evidence_text,
+                "url": opp.url,
+                "why_saved": opp.why_saved,
+                "human_review": opp.human_review,
+                "human_review_notes": opp.human_review_notes,
+            })
+    return len(opps)
+
+
+def count_saved_domains(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT domain, url FROM opportunities WHERE url IS NOT NULL AND url != ''"
+    ).fetchall()
+    conn.close()
+    counts: dict[str, int] = {}
+    for row in rows:
+        domain = row["domain"] or extract_domain(row["url"])
+        if domain:
+            counts[domain] = counts.get(domain, 0) + 1
+    return dict(sorted(counts.items(), key=lambda x: -x[1]))
 
 
 def count_opportunities_by_source(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
@@ -449,20 +666,6 @@ def count_rejected_by_reason(db_path: Path | str = DEFAULT_DB) -> dict[str, int]
 def count_rejected_domains(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
     conn = _conn(db_path)
     rows = conn.execute("SELECT url FROM rejected_results WHERE url IS NOT NULL AND url != ''").fetchall()
-    conn.close()
-    counts: dict[str, int] = {}
-    for row in rows:
-        domain = extract_domain(row["url"])
-        if domain:
-            counts[domain] = counts.get(domain, 0) + 1
-    return dict(sorted(counts.items(), key=lambda x: -x[1]))
-
-
-def count_saved_domains(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
-    conn = _conn(db_path)
-    rows = conn.execute(
-        "SELECT url FROM opportunities WHERE url IS NOT NULL AND url != ''"
-    ).fetchall()
     conn.close()
     counts: dict[str, int] = {}
     for row in rows:
