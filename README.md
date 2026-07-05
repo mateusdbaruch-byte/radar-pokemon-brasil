@@ -245,7 +245,18 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main report` | Relatório de inteligência de mercado |
 | `python3 -m src.main export` | Exporta CSV |
 | `python3 -m src.main reset-db` | Apaga banco e CSV (com confirmação) |
+| `python3 -m src.main test-mercadolivre` | Diagnostica API do Mercado Livre (não salva no banco) |
 | `python3 -m src.main --help` | Lista todas as opções |
+
+### Diagnosticar Mercado Livre
+
+Se a busca real falhar, teste só o conector:
+
+```bash
+python3 -m src.main test-mercadolivre --query "carta pokemon charizard"
+```
+
+O comando mostra URL, status HTTP, trecho da resposta, se o JSON é válido e sugestões de correção — **sem gravar no banco**.
 
 **Opções do search:**
 

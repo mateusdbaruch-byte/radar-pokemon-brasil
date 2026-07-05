@@ -13,7 +13,7 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 
 from src.connectors.discord_placeholder import DiscordPlaceholderConnector
-from src.connectors.mercado_livre import MercadoLivreConnector, get_mock_results as ml_mock
+from src.connectors.mercado_livre import MercadoLivreConnector, diagnose_search, get_mock_results as ml_mock
 from src.connectors.reddit import RedditConnector, get_mock_results as reddit_mock
 from src.connectors.youtube import YouTubeConnector
 from src.database import count_by_data_mode, fetch_all, reset_all_data, save_results
@@ -298,6 +298,65 @@ def reset_db(
 
     reset_all_data(DEFAULT_DB, DEFAULT_CSV)
     console.print("[green]✓ Banco e CSV resetados com sucesso.[/green]")
+
+
+@app.command("test-mercadolivre")
+def test_mercadolivre(
+    query: str = typer.Option(
+        "carta pokemon charizard",
+        "--query",
+        "-q",
+        help="Termo de busca para testar na API do Mercado Livre.",
+    ),
+    site_id: str = typer.Option(
+        "MLB",
+        "--site-id",
+        help="Site do Mercado Livre (MLB = Brasil).",
+    ),
+) -> None:
+    """
+    Diagnostica o conector do Mercado Livre sem salvar no banco.
+
+    Útil para validar se a API está acessível neste ambiente/rede.
+    """
+    console.print(
+        "[bold blue]🔧 Diagnóstico — Mercado Livre[/bold blue]\n"
+        "[dim]Nenhum dado será salvo no banco.[/dim]\n"
+    )
+
+    result = diagnose_search(query=query, site_id=site_id)
+
+    console.print(f"[bold]URL:[/bold]\n{result.url}\n")
+    status = result.status_code if result.status_code is not None else "—"
+    status_style = "green" if result.status_code == 200 else "red"
+    console.print(f"[bold]Status HTTP:[/bold] [{status_style}]{status}[/{status_style}]\n")
+
+    if result.error_message:
+        console.print(f"[bold red]Erro de rede:[/bold red] {result.error_message}\n")
+
+    preview = result.response_preview or "(resposta vazia)"
+    console.print(f"[bold]Primeiros 500 caracteres da resposta:[/bold]\n[dim]{preview}[/dim]\n")
+
+    json_label = "[green]sim[/green]" if result.is_valid_json else "[red]não[/red]"
+    console.print(f"[bold]JSON válido?[/bold] {json_label}")
+
+    if result.json_top_level_keys:
+        console.print(f"[bold]Chaves do JSON:[/bold] {', '.join(result.json_top_level_keys)}")
+    if result.results_count is not None:
+        console.print(f"[bold]Anúncios na resposta:[/bold] {result.results_count}")
+
+    if result.suggestions:
+        console.print("\n[bold]Possíveis causas / próximos passos:[/bold]")
+        for tip in result.suggestions:
+            console.print(f"  • {tip}")
+
+    console.print(
+        Panel(
+            "Diagnóstico concluído. Nada foi gravado em data/radar.db.",
+            border_style="blue",
+            title="ℹ️ Apenas teste",
+        )
+    )
 
 
 def main() -> None:

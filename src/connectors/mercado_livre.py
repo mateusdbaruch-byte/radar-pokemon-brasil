@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +19,136 @@ logger = logging.getLogger(__name__)
 
 # API pública do Mercado Livre Brasil
 ML_SEARCH_URL = "https://api.mercadolibre.com/sites/{site_id}/search"
+
+
+@dataclass
+class MLDiagnosticResult:
+    """Resultado de diagnóstico da API do Mercado Livre (não persiste dados)."""
+
+    url: str
+    status_code: int | None
+    response_preview: str
+    is_valid_json: bool
+    json_top_level_keys: list[str] | None
+    results_count: int | None
+    error_message: str | None
+    suggestions: list[str]
+
+
+def diagnose_search(
+    query: str,
+    site_id: str = "MLB",
+    limit: int = 5,
+) -> MLDiagnosticResult:
+    """
+    Executa uma requisição de teste à API de busca do Mercado Livre.
+
+    Não salva dados — apenas inspeciona URL, status e corpo da resposta.
+    """
+    connector = MercadoLivreConnector(site_id=site_id)
+    base_url = ML_SEARCH_URL.format(site_id=site_id)
+    params: dict[str, Any] = {"q": query, "limit": min(limit, 50)}
+
+    prepared = connector.session.prepare_request(
+        requests.Request("GET", base_url, params=params)
+    )
+    full_url = prepared.url or base_url
+
+    try:
+        response = connector.session.send(prepared, timeout=15)
+        preview = response.text[:500]
+        is_valid_json = False
+        json_keys: list[str] | None = None
+        results_count: int | None = None
+
+        try:
+            data = response.json()
+            is_valid_json = True
+            if isinstance(data, dict):
+                json_keys = list(data.keys())
+                results = data.get("results")
+                if isinstance(results, list):
+                    results_count = len(results)
+        except (json.JSONDecodeError, ValueError):
+            is_valid_json = False
+
+        suggestions = _build_suggestions(
+            status_code=response.status_code,
+            is_valid_json=is_valid_json,
+            error_message=None,
+        )
+
+        return MLDiagnosticResult(
+            url=full_url,
+            status_code=response.status_code,
+            response_preview=preview,
+            is_valid_json=is_valid_json,
+            json_top_level_keys=json_keys,
+            results_count=results_count,
+            error_message=None,
+            suggestions=suggestions,
+        )
+    except requests.RequestException as exc:
+        suggestions = _build_suggestions(
+            status_code=None,
+            is_valid_json=False,
+            error_message=str(exc),
+        )
+        return MLDiagnosticResult(
+            url=full_url,
+            status_code=None,
+            response_preview="",
+            is_valid_json=False,
+            json_top_level_keys=None,
+            results_count=None,
+            error_message=str(exc),
+            suggestions=suggestions,
+        )
+
+
+def _build_suggestions(
+    status_code: int | None,
+    is_valid_json: bool,
+    error_message: str | None,
+) -> list[str]:
+    """Gera sugestões amigáveis com base no status HTTP e no corpo."""
+    tips: list[str] = []
+
+    if error_message:
+        if "timeout" in error_message.lower():
+            tips.append("Timeout de rede — verifique sua conexão com a internet.")
+        elif "connection" in error_message.lower():
+            tips.append("Falha de conexão — firewall, proxy ou DNS podem estar bloqueando.")
+        else:
+            tips.append(f"Erro de requisição: {error_message}")
+
+    if status_code == 200 and is_valid_json:
+        tips.append("API respondeu com JSON válido — o conector deve funcionar neste ambiente.")
+        return tips
+
+    if status_code == 403:
+        tips.extend([
+            "HTTP 403 — acesso negado pela API do Mercado Livre.",
+            "IPs de datacenter/cloud costumam ser bloqueados; teste de rede residencial.",
+            "Evite muitas requisições seguidas (rate limit).",
+        ])
+    elif status_code == 429:
+        tips.extend([
+            "HTTP 429 — muitas requisições em pouco tempo.",
+            "Aguarde alguns minutos e tente novamente.",
+        ])
+    elif status_code and status_code >= 500:
+        tips.extend([
+            f"HTTP {status_code} — instabilidade no servidor do Mercado Livre.",
+            "Tente novamente mais tarde.",
+        ])
+    elif status_code == 200 and not is_valid_json:
+        tips.append("HTTP 200, mas o corpo não é JSON — resposta inesperada ou página de bloqueio.")
+
+    if not tips:
+        tips.append("Verifique internet, query de busca e configuração em config/sources.yml.")
+
+    return tips
 
 
 class MercadoLivreConnector:
