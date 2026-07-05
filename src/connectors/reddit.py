@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +21,224 @@ logger = logging.getLogger(__name__)
 # Endpoint público do Reddit (leitura sem OAuth)
 REDDIT_SEARCH_URL = "https://www.reddit.com/search.json"
 DEFAULT_USER_AGENT = "RadarPokemonBrasil/1.0 (MVP; educational)"
+
+
+@dataclass
+class RedditDiagnosticResult:
+    """Resultado de diagnóstico do Reddit (não persiste dados)."""
+
+    method: str
+    url: str
+    user_agent: str
+    status_code: int | None
+    response_preview: str
+    is_valid_json: bool
+    posts_count: int | None
+    needs_oauth: bool
+    oauth_message: str
+    error_message: str | None
+    suggestions: list[str]
+
+
+def diagnose_search(
+    query: str,
+    subreddit: str | None = None,
+    limit: int = 5,
+    user_agent: str | None = None,
+) -> RedditDiagnosticResult:
+    """
+    Executa uma requisição de teste ao endpoint JSON público do Reddit.
+
+    Não salva dados — apenas inspeciona método, status e corpo da resposta.
+    """
+    ua = user_agent or os.getenv("REDDIT_USER_AGENT", DEFAULT_USER_AGENT)
+    session = requests.Session()
+    session.headers.update({"User-Agent": ua})
+
+    params: dict[str, Any] = {
+        "q": query,
+        "limit": min(limit, 25),
+        "sort": "new",
+        "restrict_sr": "on" if subreddit else "off",
+        "type": "link",
+    }
+    base_url = REDDIT_SEARCH_URL
+    if subreddit:
+        base_url = f"https://www.reddit.com/r/{subreddit}/search.json"
+
+    prepared = session.prepare_request(requests.Request("GET", base_url, params=params))
+    full_url = prepared.url or base_url
+    method = prepared.method or "GET"
+
+    try:
+        response = session.send(prepared, timeout=15)
+        preview = response.text[:500]
+        is_valid_json = False
+        posts_count: int | None = None
+
+        try:
+            data = response.json()
+            is_valid_json = True
+            if isinstance(data, dict):
+                children = data.get("data", {}).get("children", [])
+                if isinstance(children, list):
+                    posts_count = len(children)
+        except (json.JSONDecodeError, ValueError):
+            is_valid_json = False
+
+        needs_oauth, oauth_message = _assess_oauth_need(
+            status_code=response.status_code,
+            is_valid_json=is_valid_json,
+            response_preview=preview,
+            posts_count=posts_count,
+            user_agent=ua,
+        )
+        suggestions = _build_reddit_suggestions(
+            status_code=response.status_code,
+            is_valid_json=is_valid_json,
+            needs_oauth=needs_oauth,
+            error_message=None,
+        )
+
+        return RedditDiagnosticResult(
+            method=method,
+            url=full_url,
+            user_agent=ua,
+            status_code=response.status_code,
+            response_preview=preview,
+            is_valid_json=is_valid_json,
+            posts_count=posts_count,
+            needs_oauth=needs_oauth,
+            oauth_message=oauth_message,
+            error_message=None,
+            suggestions=suggestions,
+        )
+    except requests.RequestException as exc:
+        needs_oauth, oauth_message = _assess_oauth_need(
+            status_code=None,
+            is_valid_json=False,
+            response_preview="",
+            posts_count=None,
+            user_agent=ua,
+        )
+        suggestions = _build_reddit_suggestions(
+            status_code=None,
+            is_valid_json=False,
+            needs_oauth=needs_oauth,
+            error_message=str(exc),
+        )
+        return RedditDiagnosticResult(
+            method=method,
+            url=full_url,
+            user_agent=ua,
+            status_code=None,
+            response_preview="",
+            is_valid_json=False,
+            posts_count=None,
+            needs_oauth=needs_oauth,
+            oauth_message=oauth_message,
+            error_message=str(exc),
+            suggestions=suggestions,
+        )
+
+
+def _assess_oauth_need(
+    status_code: int | None,
+    is_valid_json: bool,
+    response_preview: str,
+    posts_count: int | None,
+    user_agent: str,
+) -> tuple[bool, str]:
+    """Indica se OAuth/API oficial provavelmente será necessário."""
+    preview_lower = response_preview.lower()
+
+    if status_code == 200 and is_valid_json:
+        return (
+            False,
+            "Não — o endpoint JSON público respondeu sem OAuth. "
+            "Buscas públicas limitadas funcionam apenas com User-Agent.",
+        )
+
+    if status_code == 401:
+        return (
+            True,
+            "Sim — HTTP 401 sugere autenticação OAuth via Reddit API oficial.",
+        )
+
+    if "oauth" in preview_lower or "unauthorized" in preview_lower:
+        return (
+            True,
+            "Sim — a resposta menciona autenticação; considere OAuth no Reddit Developer Portal.",
+        )
+
+    if status_code == 403:
+        default_ua = user_agent == DEFAULT_USER_AGENT
+        hint = (
+            "Personalize REDDIT_USER_AGENT no .env (formato: App/versão (contato@email.com))."
+            if default_ua
+            else "User-Agent já personalizado; o bloqueio provavelmente é de IP/rede."
+        )
+        return (
+            False,
+            f"Não é OAuth neste caso — HTTP 403 costuma ser bloqueio anti-bot/IP. {hint}",
+        )
+
+    if status_code == 429:
+        return (
+            False,
+            "Não imediatamente — HTTP 429 é rate limit. Aguarde ou reduza frequência; "
+            "OAuth só ajuda para limites maiores em uso intensivo.",
+        )
+
+    return (
+        False,
+        "Não para buscas públicas básicas — este MVP usa JSON público sem login. "
+        "OAuth só é necessário para acesso autenticado ou limites elevados.",
+    )
+
+
+def _build_reddit_suggestions(
+    status_code: int | None,
+    is_valid_json: bool,
+    needs_oauth: bool,
+    error_message: str | None,
+) -> list[str]:
+    """Gera sugestões amigáveis para o diagnóstico do Reddit."""
+    tips: list[str] = []
+
+    if error_message:
+        if "timeout" in error_message.lower():
+            tips.append("Timeout — verifique sua conexão com a internet.")
+        elif "connection" in error_message.lower():
+            tips.append("Falha de conexão — firewall, proxy ou DNS podem estar bloqueando.")
+        else:
+            tips.append(f"Erro de requisição: {error_message}")
+
+    if status_code == 200 and is_valid_json:
+        tips.append("Reddit acessível — o conector deve funcionar neste ambiente.")
+        return tips
+
+    if status_code == 403:
+        tips.extend([
+            "HTTP 403 — Reddit bloqueou a requisição (comum em IPs de datacenter).",
+            "Configure REDDIT_USER_AGENT no .env com um e-mail de contato.",
+            "Teste de rede residencial ou VPN residencial.",
+        ])
+    elif status_code == 429:
+        tips.extend([
+            "HTTP 429 — muitas requisições; aguarde alguns minutos.",
+            "O conector já faz pausas entre buscas — evite rodar testes em loop.",
+        ])
+    elif status_code == 401:
+        tips.append("Registre um app em https://www.reddit.com/prefs/apps para OAuth.")
+
+    if needs_oauth and status_code != 401:
+        tips.append("Avalie OAuth apenas se buscas públicas não forem suficientes.")
+
+    if not tips:
+        tips.append("Verifique query, User-Agent (.env) e conectividade.")
+
+    return tips
 
 
 class RedditConnector:

@@ -14,7 +14,7 @@ from rich.panel import Panel
 
 from src.connectors.discord_placeholder import DiscordPlaceholderConnector
 from src.connectors.mercado_livre import MercadoLivreConnector, diagnose_search, get_mock_results as ml_mock
-from src.connectors.reddit import RedditConnector, get_mock_results as reddit_mock
+from src.connectors.reddit import RedditConnector, diagnose_search as diagnose_reddit, get_mock_results as reddit_mock
 from src.connectors.youtube import YouTubeConnector
 from src.database import count_by_data_mode, fetch_all, reset_all_data, save_results
 from src.exporters import export_to_csv
@@ -344,6 +344,71 @@ def test_mercadolivre(
         console.print(f"[bold]Chaves do JSON:[/bold] {', '.join(result.json_top_level_keys)}")
     if result.results_count is not None:
         console.print(f"[bold]Anúncios na resposta:[/bold] {result.results_count}")
+
+    if result.suggestions:
+        console.print("\n[bold]Possíveis causas / próximos passos:[/bold]")
+        for tip in result.suggestions:
+            console.print(f"  • {tip}")
+
+    console.print(
+        Panel(
+            "Diagnóstico concluído. Nada foi gravado em data/radar.db.",
+            border_style="blue",
+            title="ℹ️ Apenas teste",
+        )
+    )
+
+
+@app.command("test-reddit")
+def test_reddit(
+    query: str = typer.Option(
+        "pokemon tcg brasil charizard",
+        "--query",
+        "-q",
+        help="Termo de busca para testar no Reddit.",
+    ),
+    subreddit: str = typer.Option(
+        "",
+        "--subreddit",
+        "-r",
+        help="Subreddit opcional (ex.: PokemonTCG). Vazio = busca global.",
+    ),
+) -> None:
+    """
+    Diagnostica o conector do Reddit sem salvar no banco.
+
+    Testa o endpoint JSON público (GET) usado pelo MVP.
+    """
+    console.print(
+        "[bold blue]🔧 Diagnóstico — Reddit[/bold blue]\n"
+        "[dim]Nenhum dado será salvo no banco.[/dim]\n"
+    )
+
+    sub = subreddit.strip() or None
+    result = diagnose_reddit(query=query, subreddit=sub)
+
+    console.print(f"[bold]Método:[/bold] {result.method}")
+    console.print(f"[bold]URL:[/bold]\n{result.url}\n")
+    console.print(f"[bold]User-Agent:[/bold] [dim]{result.user_agent}[/dim]\n")
+
+    status = result.status_code if result.status_code is not None else "—"
+    status_style = "green" if result.status_code == 200 else "red"
+    console.print(f"[bold]Status HTTP:[/bold] [{status_style}]{status}[/{status_style}]\n")
+
+    if result.error_message:
+        console.print(f"[bold red]Erro de rede:[/bold red] {result.error_message}\n")
+
+    preview = result.response_preview or "(resposta vazia)"
+    console.print(f"[bold]Primeiros 500 caracteres da resposta:[/bold]\n[dim]{preview}[/dim]\n")
+
+    json_label = "[green]sim[/green]" if result.is_valid_json else "[red]não[/red]"
+    console.print(f"[bold]JSON válido?[/bold] {json_label}")
+    if result.posts_count is not None:
+        console.print(f"[bold]Posts na resposta:[/bold] {result.posts_count}")
+
+    oauth_label = "[yellow]sim[/yellow]" if result.needs_oauth else "[green]não[/green]"
+    console.print(f"\n[bold]Precisa configurar API/OAuth?[/bold] {oauth_label}")
+    console.print(f"[dim]{result.oauth_message}[/dim]")
 
     if result.suggestions:
         console.print("\n[bold]Possíveis causas / próximos passos:[/bold]")

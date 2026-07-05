@@ -246,6 +246,7 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main export` | Exporta CSV |
 | `python3 -m src.main reset-db` | Apaga banco e CSV (com confirmação) |
 | `python3 -m src.main test-mercadolivre` | Diagnostica API do Mercado Livre (não salva no banco) |
+| `python3 -m src.main test-reddit` | Diagnostica API do Reddit (não salva no banco) |
 | `python3 -m src.main --help` | Lista todas as opções |
 
 ### Diagnosticar Mercado Livre
@@ -257,6 +258,19 @@ python3 -m src.main test-mercadolivre --query "carta pokemon charizard"
 ```
 
 O comando mostra URL, status HTTP, trecho da resposta, se o JSON é válido e sugestões de correção — **sem gravar no banco**.
+
+### Diagnosticar Reddit
+
+```bash
+python3 -m src.main test-reddit --query "pokemon tcg brasil charizard"
+```
+
+Mostra método (GET), URL, User-Agent, status HTTP, preview da resposta, se JSON é válido e se **OAuth é necessário** — sem gravar no banco.
+
+Subreddit opcional:
+```bash
+python3 -m src.main test-reddit -q "charizard" --subreddit PokemonTCG
+```
 
 **Opções do search:**
 
