@@ -47,25 +47,83 @@ Modos: `--strict`, `--buyer-only`, `--seller-only`.
 
 Mede se as oportunidades do `web_search` são realmente úteis — prioridade em **precisão**, não volume.
 
+#### Perfis de busca
+
+Cada perfil separa um tipo de oportunidade — não misture compradores com marketplaces:
+
+```bash
+python3 -m src.main profiles-summary
+```
+
+| Perfil | Objetivo |
+|--------|----------|
+| `demand_leads` | Compradores procurando cartas (comunidades, redes) |
+| `supply_deals` | Vendedores, desapegos, arbitragem |
+| `market_reference` | Referências de preço (Liga, MYP, marketplaces) |
+
+Configs: `config/search_profiles.yml`, `config/domain_groups.yml`
+
+#### Teste de compradores
+
 ```bash
 python3 -m src.main reset-db --force
-python3 -m src.main scan-quality-test --cards Charizard,Umbreon,Mew --mode light --strict --buyer-only --limit 5
+python3 -m src.main profile-quality-test --profile demand_leads --cards Charizard,Umbreon,Mew --limit 5
 python3 -m src.main opportunity-inbox
+python3 -m src.main rejected-inbox --limit 20
+python3 -m src.main query-performance-report
+```
+
+#### Teste de vendedores/ofertas
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main profile-quality-test --profile supply_deals --cards Charizard,Umbreon,Mew --limit 5
+python3 -m src.main opportunity-inbox
+python3 -m src.main rejected-inbox --limit 20
+python3 -m src.main query-performance-report
+```
+
+#### Teste de referência de mercado
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main profile-quality-test --profile market_reference --cards Charizard,Umbreon,Mew --limit 5
+python3 -m src.main opportunity-inbox
+python3 -m src.main query-performance-report
+```
+
+#### Revisão manual e precisão
+
+```bash
 python3 -m src.main mark-opportunity --id 1 --review relevant
-python3 -m src.main mark-opportunity --id 2 --review irrelevant
+python3 -m src.main mark-rejected --id 1 --review false_negative
 python3 -m src.main precision-report
 python3 -m src.main quality-report
 python3 -m src.main export-review-csv
+```
+
+Scan por perfil individual:
+
+```bash
+python3 -m src.main scan-opportunities --profile demand_leads --card Charizard --limit 5
+python3 -m src.main scan-opportunities --profile supply_deals --card Charizard --limit 5
+python3 -m src.main scan-opportunities --profile market_reference --card Charizard --limit 5
 ```
 
 Comandos de revisão:
 
 | Comando | Descrição |
 |---------|-----------|
-| `scan-quality-test` | Scan web_search only com strict + buyer-only; salva live e rejeitados |
+| `profiles-summary` | Lista perfis, templates e filtros |
+| `profile-quality-test` | Teste de qualidade por perfil |
+| `scan-opportunities --profile` | Scan com perfil de busca |
+| `query-performance-report` | Performance por query |
+| `rejected-inbox` | Lista rejeitados para revisão |
+| `mark-rejected --id N --review false_negative\|correct_rejection` | Marca revisão de rejeitado |
+| `scan-quality-test` | Legado: strict + buyer-only (sem perfil) |
 | `review-opportunities` | Lista oportunidades para revisão manual |
 | `mark-opportunity --id N --review relevant\|irrelevant\|maybe` | Marca revisão humana (N = ID do inbox) |
-| `precision-report` | Precisão estimada, domínios bons/ruins, falsos positivos |
+| `precision-report` | Precisão estimada, falsos negativos, domínios |
 | `export-review-csv` | Exporta `data/opportunity_review.csv` |
 
 ### Scan leve (recomendado para começar)
@@ -434,6 +492,12 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main expand-queries --card Charizard` | Preview das queries enriquecidas |
 | `python3 -m src.main classify-text "..."` | Classifica texto com TCG Knowledge Layer |
 | `python3 -m src.main web-search-test` | Testa uma query web_search |
+| `python3 -m src.main profiles-summary` | Perfis de busca disponíveis |
+| `python3 -m src.main profile-quality-test --profile demand_leads` | Teste de qualidade por perfil |
+| `python3 -m src.main scan-opportunities --profile demand_leads` | Scan com perfil de busca |
+| `python3 -m src.main query-performance-report` | Performance por query |
+| `python3 -m src.main rejected-inbox` | Caixa de rejeitados para revisão |
+| `python3 -m src.main mark-rejected --id N --review false_negative` | Marca revisão de rejeitado |
 | `python3 -m src.main scan-quality-test` | Teste de qualidade (web_search, strict, buyer-only) |
 | `python3 -m src.main opportunity-inbox` | Caixa de entrada de oportunidades |
 | `python3 -m src.main review-opportunities` | Lista para revisão manual |

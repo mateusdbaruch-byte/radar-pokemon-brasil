@@ -19,6 +19,7 @@ from src.opportunity_db import fetch_wishlist_leads
 from src.opportunity_models import Opportunity
 from src.opportunity_quality import QualityFilterConfig
 from src.opportunity_scoring import score_opportunity, wishlist_lead_to_opportunity
+from src.search_profiles import SearchProfile, get_search_profile
 from src.source_registry import SourceAccess, SourceInfo, get_source_registry, parse_source_list
 
 logger = logging.getLogger(__name__)
@@ -52,26 +53,25 @@ def _scan_web_search(
     max_queries: int | None,
     on_progress: ProgressCallback | None,
     quality_config: QualityFilterConfig | None = None,
+    profile: SearchProfile | None = None,
 ) -> tuple[list[Opportunity], WebSearchScanStats | None]:
     config = WebSearchConfig.from_env(mode)
     connector = WebSearchConnector(config=config)
     if not connector.is_configured():
         return [], None
 
-    templates = connector.get_queries_for_card(
-        cards[0] if cards else "Card",
-        mode,
-        buyer_only=quality_config.buyer_only if quality_config else False,
-        seller_only=quality_config.seller_only if quality_config else False,
-    )
-    per_query = max(1, limit // max(len(templates), 1))
+    qcfg = quality_config or QualityFilterConfig()
+    templates = profile.query_templates if profile else None
+    per_query = max(1, limit // max(len(templates or [1]), 1))
     scan = connector.scan_cards(
         cards,
         limit_per_query=per_query,
         mode=mode,
         max_queries=max_queries,
         on_progress=on_progress,
-        quality_config=quality_config,
+        quality_config=qcfg,
+        profile_name=profile.name if profile else "",
+        query_templates=templates,
     )
     return scan.opportunities, scan.stats
 
@@ -130,16 +130,32 @@ def scan_opportunities(
     strict: bool = False,
     buyer_only: bool = False,
     seller_only: bool = False,
+    profile: str | None = None,
 ) -> ScanResult:
     """Executa scan nas fontes selecionadas."""
     result = ScanResult()
     registry = get_source_registry()
     selected = parse_source_list(sources)
-    quality_config = QualityFilterConfig(
-        strict=strict,
-        buyer_only=buyer_only,
-        seller_only=seller_only,
-    )
+
+    search_profile = get_search_profile(profile) if profile else None
+    if profile and not search_profile:
+        result.messages.append(f"Perfil desconhecido: {profile}")
+        return result
+
+    if search_profile:
+        quality_config = search_profile.to_quality_config()
+        if strict:
+            quality_config.strict = True
+        if buyer_only:
+            quality_config.buyer_only = True
+        if seller_only:
+            quality_config.seller_only = True
+    else:
+        quality_config = QualityFilterConfig(
+            strict=strict,
+            buyer_only=buyer_only,
+            seller_only=seller_only,
+        )
 
     for source_name in selected:
         info = registry.get(source_name)
@@ -169,6 +185,7 @@ def scan_opportunities(
                     max_queries,
                     on_web_search_progress,
                     quality_config,
+                    profile=search_profile,
                 )
                 result.web_search_stats = stats
                 if stats:

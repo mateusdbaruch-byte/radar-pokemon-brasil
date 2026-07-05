@@ -12,9 +12,9 @@ from typing import Callable
 import requests
 
 from src.models import DataMode
-from src.opportunity_db import save_rejected_result
+from src.opportunity_db import save_query_run, save_rejected_result
 from src.opportunity_models import Opportunity
-from src.opportunity_quality import QualityFilterConfig, evaluate_hit
+from src.opportunity_quality import QualityFilterConfig, evaluate_hit, extract_domain
 from src.opportunity_scoring import score_opportunity
 from src.tcg_knowledge import enrich_opportunity, generate_enriched_queries
 
@@ -303,23 +303,30 @@ class WebSearchConnector:
         max_queries: int | None = None,
         on_progress: ProgressCallback | None = None,
         quality_config: QualityFilterConfig | None = None,
+        profile_name: str = "",
+        query_templates: list[str] | None = None,
     ) -> WebSearchScanResult:
         """Busca oportunidades para cada carta usando templates de intenção."""
         scan = WebSearchScanResult()
         stats = scan.stats
         qcfg = quality_config or QualityFilterConfig()
+        profile = profile_name or qcfg.profile_name
 
         if not self.is_configured():
             return scan
 
         planned: list[tuple[str, str]] = []
         for card in cards:
-            for query in self.get_queries_for_card(
-                card,
-                mode,
-                buyer_only=qcfg.buyer_only,
-                seller_only=qcfg.seller_only,
-            ):
+            if query_templates:
+                queries = [t.format(card=card) for t in query_templates]
+            else:
+                queries = self.get_queries_for_card(
+                    card,
+                    mode,
+                    buyer_only=qcfg.buyer_only,
+                    seller_only=qcfg.seller_only,
+                )
+            for query in queries:
                 planned.append((card, query))
 
         cap = max_queries if max_queries is not None else self.config.max_queries_per_run
@@ -347,9 +354,16 @@ class WebSearchConnector:
             if on_progress:
                 on_progress(query_result, idx, len(planned))
 
+            query_saved = 0
+            query_rejected = 0
+            query_domains: set[str] = set()
+
             for hit in query_result.hits:
                 if not hit.url:
                     continue
+                domain = extract_domain(hit.url)
+                if domain:
+                    query_domains.add(domain)
                 if hit.url in seen_urls:
                     stats.urls_deduplicated += 1
                     existing = seen_urls[hit.url]
@@ -371,9 +385,17 @@ class WebSearchConnector:
                 )
                 if not evaluation.accepted:
                     save_rejected_result(
-                        query, hit.title, hit.snippet, hit.url, evaluation.reason
+                        query,
+                        hit.title,
+                        hit.snippet,
+                        hit.url,
+                        evaluation.reason,
+                        reason_category=evaluation.reason_category,
+                        profile=profile,
+                        card=card,
                     )
                     stats.results_rejected += 1
+                    query_rejected += 1
                     continue
 
                 opp.data_mode = DataMode.LIVE
@@ -387,12 +409,26 @@ class WebSearchConnector:
                     )
                 opp.set_raw_data({
                     "query": query,
+                    "profile": profile,
                     "hit": hit.__dict__,
                     "related_cards": [card],
                 })
                 seen_urls[hit.url] = opp
                 scan.opportunities.append(opp)
                 stats.opportunities_built += 1
+                query_saved += 1
+
+            save_query_run(
+                profile,
+                card,
+                query,
+                total_results=len(query_result.hits),
+                saved_count=query_saved,
+                rejected_count=query_rejected,
+                timeout_count=1 if query_result.timed_out else 0,
+                duration_seconds=query_result.elapsed_seconds,
+                domains_found=sorted(query_domains),
+            )
 
         stats.elapsed_seconds = time.monotonic() - scan_start
         return scan

@@ -1,0 +1,77 @@
+demand_leads:
+  description: "Busca compradores potenciais procurando cartas."
+  intent_filter:
+    - BUYER_DEMAND
+    - HIGH_INTENT_LEAD
+    - DISCUSSION_SIGNAL
+  strict: true
+  min_confidence: 60
+  buyer_only: true
+  seller_only: false
+  domain_groups:
+    - communities
+    - social_public
+  query_templates:
+    - '"procuro {card}" "Pokémon TCG"'
+    - '"compro {card}" "Pokémon TCG"'
+    - '"alguém vende {card}" "Pokémon"'
+    - '"alguem vende {card}" "Pokemon"'
+    - '"pago" "{card}" "Pokémon"'
+    - '"falta {card}" "coleção" "Pokémon"'
+    - '"fechando coleção" "{card}" "Pokémon"'
+    - '"master set" "{card}" "Pokémon"'
+    - 'site:reddit.com "{card}" "procuro" "Pokémon"'
+    - 'site:facebook.com "{card}" "procuro" "Pokémon TCG"'
+    - 'site:instagram.com "{card}" "procuro" "Pokémon TCG"'
+    - 'site:youtube.com "{card}" "procuro" "Pokémon TCG"'
+
+supply_deals:
+  description: "Busca vendedores, desapegos e possíveis oportunidades de compra."
+  intent_filter:
+    - SELLER_SUPPLY
+    - URGENT_SALE
+    - UNDERPRICED_LISTING
+    - ARBITRAGE_SIGNAL
+  strict: true
+  min_confidence: 55
+  buyer_only: false
+  seller_only: true
+  domain_groups:
+    - marketplaces
+    - tcg_specialized
+    - social_public
+  query_templates:
+    - '"vendo {card}" "Pokémon TCG"'
+    - '"desapego {card}" "Pokémon TCG"'
+    - '"{card}" "abaixo da Liga"'
+    - '"{card}" "menor da Liga"'
+    - '"{card}" "preço para sair"'
+    - '"{card}" "preciso fazer caixa"'
+    - '"{card}" "aceito proposta" "Pokémon"'
+    - '"{card}" "faço ML"'
+    - '"{card}" "faço OLX"'
+    - 'site:mercadolivre.com.br "{card}" "Pokémon"'
+    - 'site:olx.com.br "{card}" "Pokémon"'
+    - 'site:shopee.com.br "{card}" "Pokémon"'
+    - 'site:enjoei.com.br "{card}" "Pokémon"'
+
+market_reference:
+  description: "Busca referências públicas de preço e oferta."
+  intent_filter:
+    - PRICE_REFERENCE
+    - SELLER_SUPPLY
+    - SUPPLY_SIGNAL
+  strict: false
+  min_confidence: 45
+  buyer_only: false
+  seller_only: false
+  domain_groups:
+    - marketplaces
+    - tcg_specialized
+  query_templates:
+    - 'site:ligapokemon.com.br "{card}"'
+    - 'site:mypcards.com "{card}"'
+    - 'site:mercadolivre.com.br "{card}" "carta pokemon"'
+    - 'site:olx.com.br "{card}" "pokemon"'
+    - 'site:shopee.com.br "{card}" "pokemon"'
+    - 'site:bigdex.app "{card}"'

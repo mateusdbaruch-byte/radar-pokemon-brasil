@@ -26,6 +26,9 @@ class OpportunityType(str, Enum):
     SELLER_SUPPLY = "seller_supply"
     URGENT_SALE = "urgent_sale"
     UNDERPRICED_LISTING = "underpriced_listing"
+    ARBITRAGE_SIGNAL = "arbitrage_signal"
+    PRICE_REFERENCE = "price_reference"
+    SUPPLY_SIGNAL = "supply_signal"
 
 
 class OpportunityStatus(str, Enum):
@@ -38,6 +41,11 @@ class HumanReview(str, Enum):
     RELEVANT = "relevant"
     IRRELEVANT = "irrelevant"
     MAYBE = "maybe"
+
+
+class RejectedReview(str, Enum):
+    FALSE_NEGATIVE = "false_negative"
+    CORRECT_REJECTION = "correct_rejection"
 
 
 class Opportunity(BaseModel):

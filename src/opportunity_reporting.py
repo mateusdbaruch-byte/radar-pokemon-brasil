@@ -13,17 +13,24 @@ from src.opportunity_db import (
     count_human_reviews,
     count_opportunities_by_source,
     count_rejected_by_reason,
+    count_rejected_by_reason_category,
     count_rejected_domains,
+    count_rejected_human_reviews,
     count_rejected_results,
     count_saved_domains,
     count_types_by_review,
     count_unreviewed_opportunities,
+    fetch_false_negative_rejections,
     fetch_false_positives,
     fetch_opportunities,
+    fetch_queries_with_false_negatives,
+    fetch_query_runs,
     fetch_rejected_results,
     fetch_reviewed_opportunities,
     fetch_wishlist_leads,
 )
+from src.opportunity_quality import categorize_rejection_reason, rejection_label
+from src.search_profiles import load_search_profiles
 from src.opportunity_models import Opportunity, OpportunityType
 from src.opportunity_quality import extract_domain
 from src.source_registry import SourceAccess, get_source_registry
@@ -202,6 +209,119 @@ def display_opportunity_report(console: Console) -> None:
     console.print(src_table)
 
 
+def display_profiles_summary(console: Console) -> None:
+    """Resumo dos perfis de busca disponíveis."""
+    profiles = load_search_profiles()
+    console.print("[bold blue]📋 Search Profiles — perfis de busca[/bold blue]\n")
+
+    if not profiles:
+        console.print(Panel("Nenhum perfil em config/search_profiles.yml", border_style="yellow"))
+        return
+
+    for name, profile in profiles.items():
+        intents = ", ".join(t.value for t in profile.intent_filter) or "—"
+        groups = ", ".join(profile.domain_groups) or "—"
+        filters = []
+        if profile.strict:
+            filters.append("strict")
+        if profile.buyer_only:
+            filters.append("buyer-only")
+        if profile.seller_only:
+            filters.append("seller-only")
+        filter_label = ", ".join(filters) or "padrão"
+
+        console.print(Panel(
+            f"[bold]Descrição:[/bold] {profile.description}\n"
+            f"[bold]Templates:[/bold] {len(profile.query_templates)}\n"
+            f"[bold]Filtros:[/bold] {filter_label}\n"
+            f"[bold]min_confidence:[/bold] {profile.min_confidence}\n"
+            f"[bold]intent_filter:[/bold] {intents}\n"
+            f"[bold]domain_groups:[/bold] {groups}",
+            title=name,
+            border_style="blue",
+        ))
+        console.print()
+
+
+def display_query_performance_report(console: Console, limit: int = 30) -> None:
+    """Relatório de performance por query."""
+    runs = fetch_query_runs(limit=limit)
+    console.print("[bold blue]📈 Query Performance Report[/bold blue]\n")
+
+    if not runs:
+        console.print(
+            Panel(
+                "Nenhuma query executada ainda. Rode scan com --profile ou profile-quality-test.",
+                border_style="yellow",
+            )
+        )
+        return
+
+    table = Table(show_lines=True)
+    table.add_column("Perfil", max_width=14)
+    table.add_column("Carta")
+    table.add_column("Query", max_width=28)
+    table.add_column("Analis.", justify="right")
+    table.add_column("Salvos", justify="right")
+    table.add_column("Rej.", justify="right")
+    table.add_column("TO", justify="right")
+    table.add_column("Taxa", justify="right")
+    table.add_column("Domínios", max_width=20)
+
+    for run in runs:
+        total = run.saved_count + run.rejected_count
+        rate = (run.saved_count / total * 100) if total else 0.0
+        table.add_row(
+            run.profile or "—",
+            run.card,
+            run.query[:28],
+            str(run.total_results),
+            str(run.saved_count),
+            str(run.rejected_count),
+            str(run.timeout_count),
+            f"{rate:.0f}%",
+            (run.domains_found or "—")[:20],
+        )
+    console.print(table)
+
+
+def display_rejected_inbox(console: Console, limit: int = 20) -> None:
+    """Lista resultados rejeitados para revisão."""
+    rows = fetch_rejected_results(limit=limit)
+    console.print("[bold blue]🗑️ Rejected Inbox[/bold blue]\n")
+
+    if not rows:
+        console.print(Panel("Nenhum resultado rejeitado.", border_style="yellow"))
+        return
+
+    console.print(
+        "[dim]Use mark-rejected --id N --review false_negative|correct_rejection[/dim]\n"
+    )
+
+    table = Table(show_lines=True)
+    table.add_column("ID", justify="right")
+    table.add_column("Query", max_width=22)
+    table.add_column("Domínio", max_width=16)
+    table.add_column("Título", max_width=22)
+    table.add_column("Motivo", max_width=24)
+    table.add_column("Revisão", max_width=12)
+    table.add_column("URL", max_width=18)
+
+    for i, row in enumerate(rows, 1):
+        domain = extract_domain(row.url) if row.url else "—"
+        label = categorize_rejection_reason(row.reason, row.reason_category)
+        table.add_row(
+            str(i),
+            row.query[:22],
+            domain[:16],
+            row.title[:22],
+            label[:24],
+            row.human_review or "—",
+            (row.url or "—")[:18],
+        )
+    console.print(table)
+
+
 def display_rejected_report(console: Console, limit: int = 10) -> None:
     """Relatório de resultados rejeitados pelo filtro de qualidade."""
     total = count_rejected_results()
@@ -213,10 +333,17 @@ def display_rejected_report(console: Console, limit: int = 10) -> None:
 
     console.print(f"[bold]Total rejeitados:[/bold] {total}\n")
 
-    by_reason = count_rejected_by_reason()
-    console.print("[bold]Principais motivos[/bold]")
-    for reason, cnt in list(by_reason.items())[:8]:
-        console.print(f"  • {reason}: {cnt}")
+    by_category = count_rejected_by_reason_category()
+    if by_category:
+        console.print("[bold]Motivos por categoria[/bold]")
+        for category, cnt in list(by_category.items())[:10]:
+            console.print(f"  • {rejection_label(category)}: {cnt}")
+    else:
+        by_reason = count_rejected_by_reason()
+        console.print("[bold]Principais motivos[/bold]")
+        for reason, cnt in list(by_reason.items())[:8]:
+            label = categorize_rejection_reason(reason)
+            console.print(f"  • {label}: {cnt}")
 
     by_domain = count_rejected_domains()
     if by_domain:
@@ -228,11 +355,18 @@ def display_rejected_report(console: Console, limit: int = 10) -> None:
     if examples:
         console.print("\n[bold]Exemplos de rejeição[/bold]\n")
         table = Table(show_lines=True)
-        table.add_column("Motivo", max_width=35)
-        table.add_column("Título", max_width=30)
-        table.add_column("URL", max_width=28)
+        table.add_column("Categoria", max_width=22)
+        table.add_column("Motivo", max_width=28)
+        table.add_column("Título", max_width=24)
+        table.add_column("URL", max_width=22)
         for row in examples:
-            table.add_row(row.reason[:35], row.title[:30], (row.url or "—")[:28])
+            label = categorize_rejection_reason(row.reason, row.reason_category)
+            table.add_row(
+                label[:22],
+                row.reason[:28],
+                row.title[:24],
+                (row.url or "—")[:22],
+            )
         console.print(table)
 
 
@@ -290,35 +424,80 @@ def display_review_opportunities(console: Console, limit: int = 50) -> None:
 def display_precision_report(console: Console) -> None:
     """Relatório de precisão baseado em revisão humana."""
     reviews = count_human_reviews()
+    rejected_reviews = count_rejected_human_reviews()
     total_reviewed = sum(reviews.values())
+    total_rejected_reviewed = sum(rejected_reviews.values())
     relevant = reviews.get("relevant", 0)
     irrelevant = reviews.get("irrelevant", 0)
     maybe = reviews.get("maybe", 0)
+    false_negatives = rejected_reviews.get("false_negative", 0)
     precision = (relevant / total_reviewed * 100) if total_reviewed else 0.0
 
     console.print("[bold blue]🎯 Precision Report — revisão humana[/bold blue]\n")
 
-    if total_reviewed == 0:
+    if total_reviewed == 0 and total_rejected_reviewed == 0:
         console.print(
             Panel(
-                "Nenhuma oportunidade revisada ainda.\n\n"
-                "  • python -m src.main review-opportunities\n"
-                "  • python -m src.main mark-opportunity --id 1 --review relevant",
+                "Nenhuma revisão humana ainda.\n\n"
+                "  • mark-opportunity --id 1 --review relevant\n"
+                "  • mark-rejected --id 1 --review false_negative",
                 border_style="yellow",
                 title="Sem dados de revisão",
             )
         )
         return
 
+    panel_lines = []
+    if total_reviewed:
+        panel_lines.extend([
+            f"[bold]Oportunidades revisadas:[/bold] {total_reviewed}",
+            f"[bold]Relevantes:[/bold] {relevant}",
+            f"[bold]Irrelevantes:[/bold] {irrelevant}",
+            f"[bold]Talvez:[/bold] {maybe}",
+            f"[bold]Precisão estimada:[/bold] {precision:.1f}% (relevantes / revisados)",
+        ])
+    if total_rejected_reviewed:
+        panel_lines.extend([
+            f"[bold]Rejeitados revisados:[/bold] {total_rejected_reviewed}",
+            f"[bold]Possíveis falsos negativos:[/bold] {false_negatives}",
+        ])
     console.print(Panel(
-        f"[bold]Total revisado:[/bold] {total_reviewed}\n"
-        f"[bold]Relevantes:[/bold] {relevant}\n"
-        f"[bold]Irrelevantes:[/bold] {irrelevant}\n"
-        f"[bold]Talvez:[/bold] {maybe}\n"
-        f"[bold]Precisão estimada:[/bold] {precision:.1f}% (relevantes / revisados)",
+        "\n".join(panel_lines),
         title="Resumo de precisão",
         border_style="blue",
     ))
+
+    if false_negatives:
+        from src.opportunity_db import count_rejected_domains_by_review
+        fn_domains = count_rejected_domains_by_review("false_negative")
+        if fn_domains:
+            console.print("\n[bold yellow]Domínios com falsos negativos[/bold yellow]")
+            for domain, cnt in list(fn_domains.items())[:8]:
+                console.print(f"  • {domain}: {cnt}")
+
+        bad_queries = fetch_queries_with_false_negatives(limit=5)
+        if bad_queries:
+            console.print("\n[bold yellow]Queries rejeitando coisa boa[/bold yellow]")
+            for q in bad_queries:
+                console.print(f"  • {q[:70]}")
+
+        fn_examples = fetch_false_negative_rejections(limit=5)
+        if fn_examples:
+            console.print("\n[bold]Exemplos de falsos negativos[/bold]\n")
+            fn_table = Table(show_lines=True)
+            fn_table.add_column("Query", max_width=24)
+            fn_table.add_column("Domínio", max_width=16)
+            fn_table.add_column("Motivo", max_width=28)
+            for row in fn_examples:
+                fn_table.add_row(
+                    row.query[:24],
+                    extract_domain(row.url)[:16],
+                    categorize_rejection_reason(row.reason, row.reason_category)[:28],
+                )
+            console.print(fn_table)
+
+    if total_reviewed == 0:
+        return
 
     good_domains = count_domains_by_review("relevant")
     if good_domains:

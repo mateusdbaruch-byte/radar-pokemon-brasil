@@ -62,7 +62,27 @@ SELLER_ONLY_TYPES = frozenset({
     OpportunityType.SELLER_SUPPLY,
     OpportunityType.URGENT_SALE,
     OpportunityType.UNDERPRICED_LISTING,
+    OpportunityType.ARBITRAGE_SIGNAL,
 })
+
+REFERENCE_DOMAINS = frozenset({
+    "ligapokemon.com.br", "mypcards.com", "bigdex.app", "cardsrealm.com",
+})
+
+REJECTION_CATEGORY_LABELS: dict[str, str] = {
+    "blocked_domain": "domínio bloqueado",
+    "negative_context": "contexto negativo",
+    "low_confidence": "baixa confiança",
+    "no_intent": "sem intenção",
+    "no_tcg_context": "sem contexto TCG",
+    "intent_not_allowed": "intent não permitido pelo perfil",
+    "domain_outside_profile": "domínio fora do grupo do perfil",
+    "generic_content": "conteúdo genérico",
+    "no_card": "não menciona a carta",
+    "social_weak": "rede social sem evidência",
+    "buyer_only": "buyer-only",
+    "seller_only": "seller-only",
+}
 
 
 @dataclass
@@ -71,12 +91,16 @@ class QualityFilterConfig:
     buyer_only: bool = False
     seller_only: bool = False
     min_confidence: int = STRICT_MIN_CONFIDENCE
+    intent_filter: list[OpportunityType] | None = None
+    allowed_domains: list[str] | None = None
+    profile_name: str = ""
 
 
 @dataclass
 class QualityEvaluation:
     accepted: bool
     reason: str = ""
+    reason_category: str = ""
     why_saved: str = ""
     domain: str = ""
     pokemon_terms: list[str] = field(default_factory=list)
@@ -147,8 +171,45 @@ def is_priority_domain(url: str) -> bool:
     return domain_matches(domain, marketplace) or domain_matches(domain, community)
 
 
-def is_social_domain(url: str) -> bool:
-    return domain_matches(extract_domain(url), list(SOCIAL_DOMAINS))
+def is_domain_in_allowed_groups(domain: str, allowed: list[str] | None) -> bool:
+    if not allowed:
+        return True
+    return domain_matches(domain, allowed)
+
+
+def rejection_label(category: str) -> str:
+    return REJECTION_CATEGORY_LABELS.get(category, category)
+
+
+def categorize_rejection_reason(reason: str, reason_category: str = "") -> str:
+    if reason_category:
+        return rejection_label(reason_category)
+    reason_lower = reason.lower()
+    if "bloqueado" in reason_lower:
+        return rejection_label("blocked_domain")
+    if "negativo" in reason_lower:
+        return rejection_label("negative_context")
+    if "confidence" in reason_lower:
+        return rejection_label("low_confidence")
+    if "sem intenção" in reason_lower or "strict: sem" in reason_lower:
+        return rejection_label("no_intent")
+    if "sem contexto" in reason_lower or "tcg" in reason_lower and "sem" in reason_lower:
+        return rejection_label("no_tcg_context")
+    if "buyer-only" in reason_lower:
+        return rejection_label("buyer_only")
+    if "seller-only" in reason_lower:
+        return rejection_label("seller_only")
+    if "perfil" in reason_lower and "intent" in reason_lower:
+        return rejection_label("intent_not_allowed")
+    if "grupo do perfil" in reason_lower or "fora do grupo" in reason_lower:
+        return rejection_label("domain_outside_profile")
+    if "genérico" in reason_lower or "dicionário" in reason_lower:
+        return rejection_label("generic_content")
+    if "não menciona" in reason_lower:
+        return rejection_label("no_card")
+    if "rede social" in reason_lower:
+        return rejection_label("social_weak")
+    return reason[:60]
 
 
 def _find_terms(text: str, terms: tuple[str, ...]) -> list[str]:
@@ -196,6 +257,24 @@ def has_clear_intent(text: str) -> tuple[bool, list[str]]:
     return buy or sell, buy_terms + sell_terms
 
 
+def is_social_domain(url: str) -> bool:
+    return domain_matches(extract_domain(url), list(SOCIAL_DOMAINS))
+
+
+def _reject(
+    category: str,
+    message: str,
+    *,
+    domain: str = "",
+) -> QualityEvaluation:
+    return QualityEvaluation(
+        False,
+        reason=message,
+        reason_category=category,
+        domain=domain,
+    )
+
+
 def social_has_relevant_evidence(text: str, card_name: str) -> bool:
     if not mentions_card(text, card_name):
         return False
@@ -211,12 +290,19 @@ def classify_refined_type(
     text: str,
     domain: str,
 ) -> OpportunityType:
-    buy, buy_terms = has_buy_intent(text)
-    sell, sell_terms = has_sell_intent(text)
+    buy, _ = has_buy_intent(text)
+    sell, _ = has_sell_intent(text)
     urgent = bool(_find_terms(text, URGENT_SALE_TERMS))
+    arbitrage_terms = ("menor da liga", "preço para sair", "arbitragem")
+    text_lower = text.lower()
 
     if opp.opportunity_type == OpportunityType.WISHLIST_LEAD:
         return OpportunityType.HIGH_INTENT_LEAD
+
+    if domain in REFERENCE_DOMAINS or domain_matches(domain, list(REFERENCE_DOMAINS)):
+        if sell or opp.price or is_marketplace_domain(f"https://{domain}"):
+            return OpportunityType.PRICE_REFERENCE
+        return OpportunityType.SUPPLY_SIGNAL
 
     if is_marketplace_domain(f"https://{domain}") or opp.opportunity_type == OpportunityType.MARKETPLACE_LISTING:
         if sell or opp.price:
@@ -226,6 +312,16 @@ def classify_refined_type(
                 return OpportunityType.UNDERPRICED_LISTING
             return OpportunityType.SELLER_SUPPLY
 
+    if sell:
+        if urgent:
+            return OpportunityType.URGENT_SALE
+        if any(t in text_lower for t in arbitrage_terms):
+            return OpportunityType.ARBITRAGE_SIGNAL
+        return OpportunityType.SELLER_SUPPLY
+
+    if any(t in text_lower for t in arbitrage_terms + ("abaixo da liga",)):
+        return OpportunityType.ARBITRAGE_SIGNAL
+
     if buy and opp.intent_score >= 85:
         return OpportunityType.BUYER_DEMAND
     if buy and opp.intent_score >= 70:
@@ -233,18 +329,12 @@ def classify_refined_type(
     if buy:
         return OpportunityType.BUYER_DEMAND
 
-    if sell:
-        if urgent:
-            return OpportunityType.URGENT_SALE
-        return OpportunityType.SELLER_SUPPLY
-
     if opp.opportunity_type == OpportunityType.DISCUSSION and buy:
         return OpportunityType.DISCUSSION_SIGNAL
 
     if opp.opportunity_type == OpportunityType.DISCUSSION:
         probable = any(
-            t in text.lower()
-            for t in ("procuro", "compro", "looking for", "wtb", "quero")
+            t in text_lower for t in ("procuro", "compro", "looking for", "wtb", "quero")
         )
         if probable and mentions_card(text, opp.card_name_detected):
             return OpportunityType.DISCUSSION_SIGNAL
@@ -289,27 +379,50 @@ def evaluate_hit(
     card_ok = mentions_card(text, card_name)
 
     if is_blocked_domain(url):
-        return QualityEvaluation(False, f"domínio bloqueado: {domain}", domain=domain)
+        return _reject("blocked_domain", f"domínio bloqueado: {domain}", domain=domain)
 
     if signals.negative_context:
         terms = ", ".join(signals.negative_context[:3])
-        return QualityEvaluation(False, f"contexto negativo TCG: {terms}", domain=domain)
+        return _reject("negative_context", f"contexto negativo TCG: {terms}", domain=domain)
 
     if is_generic_content(text, url):
-        return QualityEvaluation(False, "conteúdo genérico (dicionário/notícia/música)", domain=domain)
+        return _reject(
+            "generic_content",
+            "conteúdo genérico (dicionário/notícia/música)",
+            domain=domain,
+        )
 
     if not card_ok:
-        return QualityEvaluation(False, f"não menciona a carta monitorada ({card_name})", domain=domain)
+        return _reject(
+            "no_card",
+            f"não menciona a carta monitorada ({card_name})",
+            domain=domain,
+        )
 
     if intent_ok and not pokemon_ok and not kb_has_tcg_context(text):
-        return QualityEvaluation(False, "intenção sem contexto Pokémon/TCG/carta", domain=domain)
+        return _reject(
+            "no_tcg_context",
+            "intenção sem contexto Pokémon/TCG/carta",
+            domain=domain,
+        )
 
     if not pokemon_ok and not kb_has_tcg_context(text) and not is_priority_domain(url):
-        return QualityEvaluation(False, "sem contexto Pokémon/TCG e fonte não priorizada", domain=domain)
+        return _reject(
+            "no_tcg_context",
+            "sem contexto Pokémon/TCG e fonte não priorizada",
+            domain=domain,
+        )
+
+    if config.allowed_domains and not is_domain_in_allowed_groups(domain, config.allowed_domains):
+        return _reject(
+            "domain_outside_profile",
+            f"domínio fora do grupo do perfil ({domain})",
+            domain=domain,
+        )
 
     if is_social_domain(url) and not social_has_relevant_evidence(text, card_name):
-        return QualityEvaluation(
-            False,
+        return _reject(
+            "social_weak",
             f"rede social ({domain}) sem evidência clara de Pokémon + carta + intenção",
             domain=domain,
         )
@@ -321,15 +434,15 @@ def evaluate_hit(
         or intent_ok
     )
     if config.strict and not qualifying:
-        return QualityEvaluation(
-            False,
+        return _reject(
+            "no_intent",
             "modo strict: sem intenção/coleção/raridade/condição/grading/fonte relevante",
             domain=domain,
         )
 
     if config.strict and opp.confidence_score < config.min_confidence:
-        return QualityEvaluation(
-            False,
+        return _reject(
+            "low_confidence",
             f"modo strict: confidence {opp.confidence_score} < {config.min_confidence}",
             domain=domain,
         )
@@ -343,9 +456,16 @@ def evaluate_hit(
     ):
         refined = OpportunityType.BUYER_DEMAND
 
+    if config.intent_filter and refined not in config.intent_filter:
+        return _reject(
+            "intent_not_allowed",
+            f"perfil {config.profile_name or 'ativo'}: intent {refined.value} não permitido",
+            domain=domain,
+        )
+
     if config.buyer_only and refined not in BUYER_ONLY_TYPES:
-        return QualityEvaluation(
-            False,
+        return _reject(
+            "buyer_only",
             f"buyer-only: tipo {refined.value} não é demanda de compra",
             domain=domain,
         )
@@ -354,8 +474,8 @@ def evaluate_hit(
         if marketplace and (signals.has_sell_intent or "carta" in text.lower()):
             refined = OpportunityType.SELLER_SUPPLY
         else:
-            return QualityEvaluation(
-                False,
+            return _reject(
+                "seller_only",
                 f"seller-only: tipo {refined.value} não é oferta de venda",
                 domain=domain,
             )
@@ -365,8 +485,8 @@ def evaluate_hit(
             t in text.lower() for t in ("procuro", "compro", "wtb", "looking for", "quero comprar")
         )
         if not strong:
-            return QualityEvaluation(
-                False,
+            return _reject(
+                "buyer_only",
                 "buyer-only: discussion_signal sem sinal forte de procura",
                 domain=domain,
             )

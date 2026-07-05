@@ -57,18 +57,24 @@ from src.opportunity_db import (
     count_saved_domains,
     export_review_csv,
     mark_opportunity_review,
+    mark_rejected_review,
     resolve_opportunity_index,
+    resolve_rejected_index,
     save_opportunities,
 )
-from src.opportunity_models import HumanReview, WishlistLead
+from src.opportunity_models import HumanReview, RejectedReview, WishlistLead
 from src.opportunity_reporting import (
     display_opportunity_inbox,
     display_opportunity_report,
     display_precision_report,
+    display_profiles_summary,
     display_quality_report,
+    display_query_performance_report,
+    display_rejected_inbox,
     display_rejected_report,
     display_review_opportunities,
 )
+from src.search_profiles import get_search_profile, list_profile_names
 from src.opportunity_scanner import scan_opportunities
 from src.opportunity_db import save_wishlist_lead
 from src.wishlist import import_wishlist_csv, validate_wishlist_csv
@@ -362,6 +368,118 @@ def _print_quality_test_summary(
     console.print(f"  Tempo total: {elapsed:.1f}s")
 
 
+@app.command("profiles-summary")
+def profiles_summary_cmd() -> None:
+    """Lista perfis de busca disponíveis e seus filtros."""
+    display_profiles_summary(console)
+
+
+@app.command("profile-quality-test")
+def profile_quality_test_cmd(
+    profile: str = typer.Option(..., "--profile", "-p", help="Perfil: demand_leads, supply_deals, market_reference"),
+    cards: str = typer.Option(
+        "Charizard,Umbreon,Mew",
+        "--cards",
+        "-c",
+        help="Cartas separadas por vírgula",
+    ),
+    limit: int = typer.Option(5, "--limit", "-l"),
+    max_queries: int = typer.Option(0, "--max-queries"),
+) -> None:
+    """Teste de qualidade por perfil — mede aproveitamento e recomenda ajustes."""
+    if not get_search_profile(profile):
+        console.print(f"[red]Perfil desconhecido: {profile}[/red]")
+        console.print(f"[dim]Disponíveis: {', '.join(list_profile_names())}[/dim]")
+        raise typer.Exit(1)
+
+    card_list = parse_card_list(cards)
+    if not card_list:
+        console.print("[red]Informe cartas com --cards[/red]")
+        raise typer.Exit(1)
+
+    search_profile = get_search_profile(profile)
+    query_cap = max_queries if max_queries > 0 else None
+    scan_start = time.monotonic()
+
+    console.print(
+        f"[bold blue]🧪 Profile Quality Test — {profile}[/bold blue]\n"
+        f"[dim]{search_profile.description}[/dim]\n"
+        f"[dim]Cartas: {', '.join(card_list)} | limit={limit}[/dim]\n"
+    )
+
+    def _on_web_progress(
+        query_result: WebSearchQueryResult,
+        current: int,
+        total: int,
+    ) -> None:
+        status = "[green]OK[/green]" if query_result.success else "[red]falha[/red]"
+        if query_result.timed_out:
+            status = "[yellow]timeout[/yellow]"
+        console.print(
+            f"[cyan]  [{current}/{total}][/cyan] {query_result.query[:70]}"
+            f" → {len(query_result.hits)} hit(s) | {status}"
+            f" | {query_result.elapsed_seconds:.1f}s"
+        )
+
+    result = scan_opportunities(
+        card_list,
+        "web_search",
+        limit=limit,
+        max_queries=query_cap,
+        on_web_search_progress=_on_web_progress,
+        profile=profile,
+    )
+
+    elapsed = time.monotonic() - scan_start
+    saved = merged = 0
+
+    if result.opportunities:
+        save_result = save_opportunities(result.opportunities)
+        saved = save_result.saved
+        merged = save_result.merged
+        console.print(f"\n[green]✓ {saved + merged} oportunidades salvas[/green]")
+    else:
+        console.print("\n[yellow]Nenhuma oportunidade salva neste teste.[/yellow]")
+
+    _print_quality_test_summary(
+        card_list,
+        result,
+        saved=saved,
+        merged=merged,
+        elapsed=elapsed,
+    )
+
+    rejected = count_rejected_results()
+    saved_total = saved + merged
+    total_eval = saved_total + rejected
+    rate = (saved_total / total_eval * 100) if total_eval else 0.0
+
+    console.print("\n[bold]Recomendação do perfil[/bold]")
+    if rate < 10 and rejected > 5:
+        console.print(
+            "  • [yellow]Perfil muito agressivo[/yellow] — recall baixo. "
+            "Revise rejected-inbox para falsos negativos ou relaxe min_confidence."
+        )
+    elif rate > 50 and saved_total > 3:
+        console.print(
+            "  • [yellow]Perfil permissivo[/yellow] — revise opportunity-inbox "
+            "e marque irrelevantes para medir precisão."
+        )
+    elif saved_total == 0:
+        console.print(
+            "  • [yellow]Zero salvos[/yellow] — verifique query-performance-report "
+            "e rejected-inbox."
+        )
+    else:
+        console.print(
+            "  • [green]Perfil equilibrado[/green] — continue revisão manual "
+            "(opportunity-inbox + rejected-inbox)."
+        )
+    console.print(
+        "\n[dim]Próximo: rejected-inbox → query-performance-report → precision-report[/dim]"
+    )
+
+
 @app.command("scan-quality-test")
 def scan_quality_test_cmd(
     cards: str = typer.Option(
@@ -479,8 +597,19 @@ def scan_opportunities_cmd(
         "--seller-only",
         help="Salvar apenas ofertas de venda (seller_supply, urgent_sale, underpriced_listing)",
     ),
+    profile: str = typer.Option(
+        "",
+        "--profile",
+        "-p",
+        help="Perfil de busca: demand_leads, supply_deals, market_reference",
+    ),
 ) -> None:
     """Escaneia oportunidades automatizadas nas fontes disponíveis."""
+    if profile and not get_search_profile(profile):
+        console.print(f"[red]Perfil desconhecido: {profile}[/red]")
+        console.print(f"[dim]Disponíveis: {', '.join(list_profile_names())}[/dim]")
+        raise typer.Exit(1)
+
     if card.strip():
         card_list = [card.strip()]
         cards_label = card.strip()
@@ -498,6 +627,8 @@ def scan_opportunities_cmd(
     query_cap = max_queries if max_queries > 0 else None
     scan_start = time.monotonic()
     filter_notes = []
+    if profile:
+        filter_notes.append(f"profile={profile}")
     if strict:
         filter_notes.append("strict")
     if buyer_only:
@@ -539,6 +670,7 @@ def scan_opportunities_cmd(
         strict=strict,
         buyer_only=buyer_only,
         seller_only=seller_only,
+        profile=profile or None,
     )
 
     elapsed = time.monotonic() - scan_start
@@ -720,6 +852,49 @@ def rejected_report_cmd(
 ) -> None:
     """Relatório de resultados rejeitados pelo filtro de qualidade."""
     display_rejected_report(console, limit=limit)
+
+
+@app.command("rejected-inbox")
+def rejected_inbox_cmd(
+    limit: int = typer.Option(20, "--limit", "-n"),
+) -> None:
+    """Lista resultados rejeitados para revisão manual."""
+    display_rejected_inbox(console, limit=limit)
+
+
+@app.command("mark-rejected")
+def mark_rejected_cmd(
+    rej_id: int = typer.Option(..., "--id", help="ID 1-based (como em rejected-inbox)"),
+    review: RejectedReview = typer.Option(
+        ...,
+        "--review",
+        help="false_negative ou correct_rejection",
+    ),
+    notes: str = typer.Option("", "--notes"),
+) -> None:
+    """Marca resultado rejeitado com revisão humana."""
+    row = resolve_rejected_index(rej_id)
+    if not row:
+        console.print(f"[red]Rejeitado #{rej_id} não encontrado.[/red]")
+        raise typer.Exit(1)
+
+    ok = mark_rejected_review(row.id, review.value, notes)
+    if not ok:
+        console.print("[red]Falha ao salvar revisão.[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[green]✓ Rejeitado #{rej_id} marcado como {review.value}[/green]\n"
+        f"[dim]Query: {row.query[:60]} | Motivo: {row.reason[:50]}[/dim]"
+    )
+
+
+@app.command("query-performance-report")
+def query_performance_report_cmd(
+    limit: int = typer.Option(30, "--limit", "-n"),
+) -> None:
+    """Relatório de performance por query executada."""
+    display_query_performance_report(console, limit=limit)
 
 
 @app.command("quality-report")

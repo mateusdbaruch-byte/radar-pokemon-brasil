@@ -60,6 +60,22 @@ CREATE TABLE IF NOT EXISTS rejected_results (
 );
 """
 
+CREATE_QUERY_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS query_runs (
+    id TEXT PRIMARY KEY,
+    profile TEXT NOT NULL DEFAULT '',
+    card TEXT NOT NULL,
+    query TEXT NOT NULL,
+    total_results INTEGER NOT NULL DEFAULT 0,
+    saved_count INTEGER NOT NULL DEFAULT 0,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    timeout_count INTEGER NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0,
+    executed_at TEXT NOT NULL,
+    domains_found TEXT DEFAULT ''
+);
+"""
+
 CREATE_WISHLIST_TABLE = """
 CREATE TABLE IF NOT EXISTS wishlist_leads (
     id TEXT PRIMARY KEY,
@@ -85,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_opp_url ON opportunities(url);
 CREATE INDEX IF NOT EXISTS idx_wishlist_card ON wishlist_leads(card_name);
 CREATE INDEX IF NOT EXISTS idx_rejected_at ON rejected_results(rejected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_rejected_reason ON rejected_results(reason);
+CREATE INDEX IF NOT EXISTS idx_query_runs_profile ON query_runs(profile);
+CREATE INDEX IF NOT EXISTS idx_query_runs_executed ON query_runs(executed_at DESC);
 """
 
 
@@ -117,6 +135,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if col not in cols:
             conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col} {typedef}")
 
+    rej_cols = {row[1] for row in conn.execute("PRAGMA table_info(rejected_results)")}
+    rej_new_cols = {
+        "reason_category": "TEXT DEFAULT ''",
+        "profile": "TEXT DEFAULT ''",
+        "card": "TEXT DEFAULT ''",
+        "human_review": "TEXT DEFAULT ''",
+        "human_review_notes": "TEXT DEFAULT ''",
+        "reviewed_at": "TEXT",
+    }
+    for col, typedef in rej_new_cols.items():
+        if col not in rej_cols:
+            conn.execute(f"ALTER TABLE rejected_results ADD COLUMN {col} {typedef}")
+
 
 def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
     ensure_data_dir()
@@ -126,6 +157,7 @@ def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
         CREATE_OPPORTUNITIES_TABLE
         + CREATE_WISHLIST_TABLE
         + CREATE_REJECTED_TABLE
+        + CREATE_QUERY_RUNS_TABLE
         + CREATE_OPP_INDEXES
     )
     _migrate(conn)
@@ -560,8 +592,187 @@ def clear_opportunity_data(db_path: Path | str = DEFAULT_DB) -> None:
     conn.execute("DELETE FROM opportunities")
     conn.execute("DELETE FROM wishlist_leads")
     conn.execute("DELETE FROM rejected_results")
+    conn.execute("DELETE FROM query_runs")
     conn.commit()
     conn.close()
+
+
+@dataclass
+class QueryRun:
+    id: str
+    profile: str
+    card: str
+    query: str
+    total_results: int
+    saved_count: int
+    rejected_count: int
+    timeout_count: int
+    duration_seconds: float
+    executed_at: datetime
+    domains_found: str = ""
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row | dict[str, Any]) -> QueryRun:
+        data = dict(row)
+        return cls(
+            id=data["id"],
+            profile=data.get("profile") or "",
+            card=data["card"],
+            query=data["query"],
+            total_results=int(data.get("total_results") or 0),
+            saved_count=int(data.get("saved_count") or 0),
+            rejected_count=int(data.get("rejected_count") or 0),
+            timeout_count=int(data.get("timeout_count") or 0),
+            duration_seconds=float(data.get("duration_seconds") or 0),
+            executed_at=datetime.fromisoformat(data["executed_at"]),
+            domains_found=data.get("domains_found") or "",
+        )
+
+
+def save_query_run(
+    profile: str,
+    card: str,
+    query: str,
+    *,
+    total_results: int = 0,
+    saved_count: int = 0,
+    rejected_count: int = 0,
+    timeout_count: int = 0,
+    duration_seconds: float = 0.0,
+    domains_found: list[str] | None = None,
+    db_path: Path | str = DEFAULT_DB,
+) -> str:
+    run_id = str(uuid.uuid4())
+    domains_str = ",".join(domains_found or [])
+    conn = _conn(db_path)
+    conn.execute(
+        """
+        INSERT INTO query_runs (
+            id, profile, card, query, total_results, saved_count,
+            rejected_count, timeout_count, duration_seconds, executed_at, domains_found
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            profile,
+            card,
+            query,
+            total_results,
+            saved_count,
+            rejected_count,
+            timeout_count,
+            duration_seconds,
+            datetime.now(timezone.utc).isoformat(),
+            domains_str,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return run_id
+
+
+def fetch_query_runs(
+    db_path: Path | str = DEFAULT_DB,
+    profile: str | None = None,
+    limit: int | None = None,
+) -> list[QueryRun]:
+    conn = _conn(db_path)
+    sql = "SELECT * FROM query_runs"
+    params: list[Any] = []
+    if profile:
+        sql += " WHERE profile = ?"
+        params.append(profile)
+    sql += " ORDER BY executed_at DESC"
+    if limit:
+        sql += f" LIMIT {limit}"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [QueryRun.from_row(r) for r in rows]
+
+
+def count_rejected_human_reviews(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT human_review, COUNT(*) as cnt
+        FROM rejected_results
+        WHERE human_review IS NOT NULL AND human_review != ''
+        GROUP BY human_review
+        """
+    ).fetchall()
+    conn.close()
+    return {r["human_review"]: r["cnt"] for r in rows}
+
+
+def fetch_false_negative_rejections(
+    limit: int = 5,
+    db_path: Path | str = DEFAULT_DB,
+) -> list["RejectedResult"]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT * FROM rejected_results
+        WHERE human_review = 'false_negative'
+        ORDER BY rejected_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [_rejected_from_row(r) for r in rows]
+
+
+def count_rejected_domains_by_review(
+    review: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT url FROM rejected_results WHERE human_review = ?",
+        (review,),
+    ).fetchall()
+    conn.close()
+    counts: dict[str, int] = {}
+    for row in rows:
+        domain = extract_domain(row["url"] or "")
+        if domain:
+            counts[domain] = counts.get(domain, 0) + 1
+    return dict(sorted(counts.items(), key=lambda x: -x[1]))
+
+
+def count_rejected_by_reason_category(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT reason_category, COUNT(*) as cnt
+        FROM rejected_results
+        WHERE reason_category IS NOT NULL AND reason_category != ''
+        GROUP BY reason_category
+        ORDER BY cnt DESC
+        """
+    ).fetchall()
+    conn.close()
+    return {r["reason_category"]: r["cnt"] for r in rows}
+
+
+def fetch_queries_with_false_negatives(
+    limit: int = 5,
+    db_path: Path | str = DEFAULT_DB,
+) -> list[str]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT query, COUNT(*) as cnt
+        FROM rejected_results
+        WHERE human_review = 'false_negative'
+        GROUP BY query
+        ORDER BY cnt DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [r["query"] for r in rows]
 
 
 @dataclass
@@ -573,6 +784,12 @@ class RejectedResult:
     url: str
     reason: str
     rejected_at: datetime
+    reason_category: str = ""
+    profile: str = ""
+    card: str = ""
+    human_review: str = ""
+    human_review_notes: str = ""
+    reviewed_at: datetime | None = None
 
     @classmethod
     def create(
@@ -582,6 +799,10 @@ class RejectedResult:
         snippet: str,
         url: str,
         reason: str,
+        *,
+        reason_category: str = "",
+        profile: str = "",
+        card: str = "",
     ) -> RejectedResult:
         return cls(
             id=str(uuid.uuid4()),
@@ -591,7 +812,29 @@ class RejectedResult:
             url=url,
             reason=reason,
             rejected_at=datetime.now(timezone.utc),
+            reason_category=reason_category,
+            profile=profile,
+            card=card,
         )
+
+
+def _rejected_from_row(r: sqlite3.Row) -> RejectedResult:
+    reviewed = r["reviewed_at"] if "reviewed_at" in r.keys() else None
+    return RejectedResult(
+        id=r["id"],
+        query=r["query"],
+        title=r["title"] or "",
+        snippet=r["snippet"] or "",
+        url=r["url"] or "",
+        reason=r["reason"],
+        rejected_at=datetime.fromisoformat(r["rejected_at"]),
+        reason_category=(r["reason_category"] if "reason_category" in r.keys() else "") or "",
+        profile=(r["profile"] if "profile" in r.keys() else "") or "",
+        card=(r["card"] if "card" in r.keys() else "") or "",
+        human_review=(r["human_review"] if "human_review" in r.keys() else "") or "",
+        human_review_notes=(r["human_review_notes"] if "human_review_notes" in r.keys() else "") or "",
+        reviewed_at=datetime.fromisoformat(reviewed) if reviewed else None,
+    )
 
 
 def save_rejected_result(
@@ -601,13 +844,24 @@ def save_rejected_result(
     url: str,
     reason: str,
     db_path: Path | str = DEFAULT_DB,
+    *,
+    reason_category: str = "",
+    profile: str = "",
+    card: str = "",
 ) -> None:
-    row = RejectedResult.create(query, title, snippet, url, reason)
+    row = RejectedResult.create(
+        query, title, snippet, url, reason,
+        reason_category=reason_category,
+        profile=profile,
+        card=card,
+    )
     conn = _conn(db_path)
     conn.execute(
         """
-        INSERT INTO rejected_results (id, query, title, snippet, url, reason, rejected_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO rejected_results (
+            id, query, title, snippet, url, reason, rejected_at,
+            reason_category, profile, card
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             row.id,
@@ -617,6 +871,9 @@ def save_rejected_result(
             row.url,
             row.reason,
             row.rejected_at.isoformat(),
+            row.reason_category,
+            row.profile,
+            row.card,
         ),
     )
     conn.commit()
@@ -633,18 +890,40 @@ def fetch_rejected_results(
         sql += f" LIMIT {limit}"
     rows = conn.execute(sql).fetchall()
     conn.close()
-    results: list[RejectedResult] = []
-    for r in rows:
-        results.append(RejectedResult(
-            id=r["id"],
-            query=r["query"],
-            title=r["title"] or "",
-            snippet=r["snippet"] or "",
-            url=r["url"] or "",
-            reason=r["reason"],
-            rejected_at=datetime.fromisoformat(r["rejected_at"]),
-        ))
-    return results
+    return [_rejected_from_row(r) for r in rows]
+
+
+def resolve_rejected_index(
+    index: int,
+    db_path: Path | str = DEFAULT_DB,
+) -> RejectedResult | None:
+    if index < 1:
+        return None
+    rows = fetch_rejected_results(db_path)
+    if index > len(rows):
+        return None
+    return rows[index - 1]
+
+
+def mark_rejected_review(
+    rejected_id: str,
+    review: str,
+    notes: str = "",
+    db_path: Path | str = DEFAULT_DB,
+) -> bool:
+    conn = _conn(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """
+        UPDATE rejected_results
+        SET human_review = ?, human_review_notes = ?, reviewed_at = ?
+        WHERE id = ?
+        """,
+        (review, notes, now, rejected_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
 
 
 def count_rejected_results(db_path: Path | str = DEFAULT_DB) -> int:
