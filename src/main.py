@@ -11,16 +11,23 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
+from rich.table import Table
 
+from src.connector_health import fetch_latest_by_source, save_health_check, save_search_run_log
 from src.connectors.discord_placeholder import DiscordPlaceholderConnector
-from src.connectors.mercado_livre import MercadoLivreConnector, diagnose_search, get_mock_results as ml_mock
-from src.connectors.reddit import RedditConnector, diagnose_search as diagnose_reddit, get_mock_results as reddit_mock
+from src.connectors.mercado_livre import MercadoLivreConnector, diagnose_search as diagnose_ml
+from src.connectors.mercado_livre import get_mock_results as ml_mock
+from src.connectors.reddit import RedditConnector, diagnose_search as diagnose_reddit
+from src.connectors.reddit import get_mock_results as reddit_mock
 from src.connectors.youtube import YouTubeConnector
 from src.database import count_by_data_mode, fetch_all, reset_all_data, save_results
+from src.doctor import run_doctor
 from src.exporters import export_to_csv
-from src.models import DataMode
+from src.health_adapters import mercado_livre_to_health, reddit_to_health
+from src.models import DataMode, tag_results
 from src.paths import DEFAULT_CARDS, DEFAULT_CSV, DEFAULT_DB, DEFAULT_SOURCES, PROJECT_ROOT
 from src.reporting import display_market_report
+from src.search_modes import SearchMode, resolve_search_mode
 
 load_dotenv(PROJECT_ROOT / ".env")
 
@@ -40,7 +47,6 @@ logger = logging.getLogger(__name__)
 
 
 def load_yaml(path: Path) -> dict:
-    """Carrega arquivo YAML de configuração."""
     if not path.exists():
         console.print(f"[red]Arquivo não encontrado: {path}[/red]")
         raise typer.Exit(1)
@@ -49,25 +55,17 @@ def load_yaml(path: Path) -> dict:
 
 
 def load_cards(cards_path: Path) -> list[str]:
-    """Carrega lista de cartas do YAML."""
-    data = load_yaml(cards_path)
-    return data.get("cards", [])
+    return load_yaml(cards_path).get("cards", [])
 
 
 def load_sources_config(sources_path: Path) -> dict:
-    """Carrega configuração de fontes."""
     return load_yaml(sources_path).get("sources", {})
 
 
 def _print_source_error(source_name: str, hint: str) -> None:
-    """Mensagem amigável quando uma fonte falha em modo --no-mock."""
     console.print(
         Panel(
-            f"[yellow]A fonte [bold]{source_name}[/bold] não retornou dados.[/yellow]\n\n"
-            f"Possíveis causas:\n"
-            f"  • Bloqueio temporário da API (HTTP 403/429)\n"
-            f"  • Problema de conexão com a internet\n"
-            f"  • Configuração incompleta\n\n"
+            f"[yellow]A fonte [bold]{source_name}[/bold] não retornou dados reais.[/yellow]\n\n"
             f"[dim]{hint}[/dim]",
             border_style="yellow",
             title=f"⚠ {source_name}",
@@ -77,58 +75,37 @@ def _print_source_error(source_name: str, hint: str) -> None:
 
 @app.command()
 def search(
-    cards: Path = typer.Option(
-        DEFAULT_CARDS,
-        "--cards",
-        "-c",
-        help="Arquivo YAML com lista de cartas.",
-    ),
-    sources: Path = typer.Option(
-        DEFAULT_SOURCES,
-        "--sources",
-        "-s",
-        help="Arquivo YAML com fontes habilitadas.",
-    ),
-    limit: int = typer.Option(
-        20,
-        "--limit",
-        "-l",
-        help="Limite de resultados por carta por fonte.",
-    ),
-    mock: bool = typer.Option(
-        False,
-        "--mock",
-        help="Usar apenas dados simulados (data_mode=mock).",
-    ),
-    no_mock: bool = typer.Option(
-        False,
-        "--no-mock",
-        help="Apenas dados reais; sem fallback simulado se APIs falharem.",
-    ),
+    cards: Path = typer.Option(DEFAULT_CARDS, "--cards", "-c"),
+    sources: Path = typer.Option(DEFAULT_SOURCES, "--sources", "-s"),
+    limit: int = typer.Option(20, "--limit", "-l"),
+    live_only: bool = typer.Option(False, "--live-only", help="Apenas dados reais; sem mock."),
+    allow_mock: bool = typer.Option(False, "--allow-mock", help="Permite fallback mock (padrão)."),
+    mock_only: bool = typer.Option(False, "--mock-only", help="Apenas dados simulados."),
 ) -> None:
     """Executa busca nas fontes públicas configuradas."""
-    if mock and no_mock:
-        console.print("[red]Use apenas --mock OU --no-mock, não ambos.[/red]")
-        raise typer.Exit(1)
+    try:
+        mode = resolve_search_mode(live_only, allow_mock, mock_only)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
-    mode_label = "mock" if mock else "live (sem fallback)" if no_mock else "live"
     console.print(
-        f"[bold blue]🔍 Radar Pokémon Brasil — Iniciando busca ({mode_label})...[/bold blue]\n"
+        f"[bold blue]🔍 Radar Pokémon Brasil — busca ({mode.value})[/bold blue]\n"
     )
 
     card_list = load_cards(cards)
     if not card_list:
-        console.print(f"[red]Nenhuma carta encontrada em {cards}[/red]")
+        console.print(f"[red]Nenhuma carta em {cards}[/red]")
         raise typer.Exit(1)
 
     sources_cfg = load_sources_config(sources)
     all_results: list = []
-    allow_fallback = not mock and not no_mock
+    source_errors = 0
 
     reddit_cfg = sources_cfg.get("reddit", {})
     if reddit_cfg.get("enabled", True):
         console.print("[cyan]→ Reddit[/cyan]")
-        if mock:
+        if mode == SearchMode.MOCK_ONLY:
             for card in card_list:
                 all_results.extend(reddit_mock(card))
         else:
@@ -136,23 +113,26 @@ def search(
                 subreddits=reddit_cfg.get("subreddits"),
                 query_suffix=reddit_cfg.get("query_suffix", "pokemon card"),
             )
-            results = connector.search_cards(card_list, limit_per_card=limit)
+            mode_label = "OAuth" if connector.uses_oauth else "público"
+            console.print(f"[dim]  Modo Reddit: {mode_label}[/dim]")
+            results = tag_results(
+                connector.search_cards(card_list, limit_per_card=limit),
+                DataMode.LIVE,
+            )
             if results:
                 all_results.extend(results)
-            elif no_mock:
-                _print_source_error(
-                    "Reddit",
-                    "Configure REDDIT_USER_AGENT no .env ou tente de outra rede.",
-                )
-            elif allow_fallback:
-                console.print("[yellow]  Reddit vazio — usando fallback mock...[/yellow]")
+            elif mode == SearchMode.LIVE_ONLY:
+                source_errors += 1
+                _print_source_error("Reddit", "Configure REDDIT_USER_AGENT ou OAuth no .env")
+            elif mode == SearchMode.ALLOW_MOCK:
+                console.print("[yellow]  Reddit vazio — fallback mock[/yellow]")
                 for card in card_list:
                     all_results.extend(reddit_mock(card))
 
     ml_cfg = sources_cfg.get("mercado_livre", {})
     if ml_cfg.get("enabled", True):
         console.print("[cyan]→ Mercado Livre[/cyan]")
-        if mock:
+        if mode == SearchMode.MOCK_ONLY:
             for card in card_list:
                 all_results.extend(ml_mock(card))
         else:
@@ -160,272 +140,182 @@ def search(
                 site_id=ml_cfg.get("site_id", "MLB"),
                 category=ml_cfg.get("category", ""),
             )
-            results = connector.search_cards(card_list, limit_per_card=limit)
+            results = tag_results(
+                connector.search_cards(card_list, limit_per_card=limit),
+                DataMode.LIVE,
+            )
             if results:
                 all_results.extend(results)
-            elif no_mock:
+            elif mode == SearchMode.LIVE_ONLY:
+                source_errors += 1
                 _print_source_error(
                     "Mercado Livre",
-                    "Tente de rede residencial; APIs podem bloquear IPs de datacenter.",
+                    "Rode test-mercadolivre ou doctor; teste em rede residencial.",
                 )
-            elif allow_fallback:
-                console.print("[yellow]  Mercado Livre vazio — usando fallback mock...[/yellow]")
+            elif mode == SearchMode.ALLOW_MOCK:
+                console.print("[yellow]  Mercado Livre vazio — fallback mock[/yellow]")
                 for card in card_list:
                     all_results.extend(ml_mock(card))
 
-    yt_cfg = sources_cfg.get("youtube", {})
-    if yt_cfg.get("enabled", False) and not mock:
+    if sources_cfg.get("youtube", {}).get("enabled", False) and mode != SearchMode.MOCK_ONLY:
         console.print("[cyan]→ YouTube[/cyan]")
         connector = YouTubeConnector(
-            max_comments_per_video=yt_cfg.get("max_comments_per_video", 20),
+            max_comments_per_video=sources_cfg["youtube"].get("max_comments_per_video", 20),
         )
         if connector.is_available():
-            all_results.extend(connector.search_cards(card_list, limit_per_card=limit))
-        else:
-            console.print(
-                "[yellow]  YouTube desabilitado: configure YOUTUBE_API_KEY no .env[/yellow]"
+            all_results.extend(
+                tag_results(connector.search_cards(card_list, limit_per_card=limit), DataMode.LIVE)
             )
-
-    discord_cfg = sources_cfg.get("discord", {})
-    if discord_cfg.get("enabled", False):
-        console.print("[cyan]→ Discord (placeholder)[/cyan]")
-        DiscordPlaceholderConnector().search_cards(card_list)
+        else:
+            console.print("[yellow]  YouTube: configure YOUTUBE_API_KEY[/yellow]")
+            if mode == SearchMode.LIVE_ONLY:
+                source_errors += 1
 
     if not all_results:
         console.print(
             Panel(
                 "[red]Nenhum resultado coletado.[/red]\n\n"
-                "Opções:\n"
-                "  • [bold]python3 -m src.main search --mock[/bold] — testar com dados simulados\n"
-                "  • Verifique internet e .env\n"
-                "  • Rode sem --no-mock para permitir fallback automático",
+                "  • [bold]doctor[/bold] — diagnóstico geral\n"
+                "  • [bold]search --mock-only[/bold] — demonstração\n"
+                "  • [bold]search --live-only[/bold] — validação real",
                 border_style="red",
                 title="Busca sem resultados",
             )
         )
+        save_search_run_log(mode.value, 0, 0, 0, source_errors)
         raise typer.Exit(1)
 
     mode_counts = count_by_data_mode(all_results)
     saved = save_results(all_results, DEFAULT_DB)
-    console.print(f"\n[green]✓ {saved} resultados salvos em {DEFAULT_DB}[/green]")
-    console.print(
-        f"[dim]  live: {mode_counts['live']} | "
-        f"mock: {mode_counts['mock']} | "
-        f"manual_import: {mode_counts['manual_import']}[/dim]"
+    save_search_run_log(
+        mode.value,
+        mode_counts["live"],
+        mode_counts["mock"],
+        mode_counts["manual_import"],
+        source_errors,
     )
 
-    csv_path = export_to_csv(DEFAULT_CSV, DEFAULT_DB)
-    console.print(f"[green]✓ CSV exportado para {csv_path}[/green]\n")
-
+    console.print(f"\n[green]✓ {saved} resultados salvos[/green]")
+    console.print(
+        f"[dim]  live: {mode_counts['live']} | mock: {mode_counts['mock']} | "
+        f"manual: {mode_counts['manual_import']} | erros de fonte: {source_errors}[/dim]"
+    )
+    export_to_csv(DEFAULT_CSV, DEFAULT_DB)
+    console.print(f"[green]✓ CSV atualizado: {DEFAULT_CSV}[/green]\n")
     display_market_report(console, all_results, monitored_cards=card_list, top_signals=5)
 
 
 @app.command()
 def report(
-    cards: Path = typer.Option(
-        DEFAULT_CARDS,
-        "--cards",
-        "-c",
-        help="Arquivo YAML com cartas monitoradas (para incluir cartas sem dados).",
-    ),
-    top: int = typer.Option(
-        5,
-        "--top",
-        "-n",
-        help="Quantidade de sinais individuais no detalhe final.",
-    ),
+    cards: Path = typer.Option(DEFAULT_CARDS, "--cards", "-c"),
+    top: int = typer.Option(5, "--top", "-n"),
 ) -> None:
-    """Exibe relatório de inteligência de mercado dos resultados salvos."""
-    if not DEFAULT_DB.exists():
-        console.print(
-            "[yellow]Nenhum dado salvo ainda.\n\n"
-            "Execute primeiro:\n"
-            "  python3 -m src.main search --mock --limit 5[/yellow]"
-        )
+    """Relatório de inteligência de mercado."""
+    if not DEFAULT_DB.exists() or not fetch_all(DEFAULT_DB):
+        console.print("[yellow]Sem dados. Rode search ou doctor primeiro.[/yellow]")
         raise typer.Exit(0)
-
-    results = fetch_all(DEFAULT_DB)
-    if not results:
-        console.print("[yellow]Banco vazio. Execute uma busca primeiro.[/yellow]")
-        raise typer.Exit(0)
-
-    card_list = load_cards(cards)
-    console.print(
-        "[bold blue]📊 Relatório de Inteligência de Mercado — Radar Pokémon Brasil[/bold blue]\n"
-    )
-    display_market_report(console, results, monitored_cards=card_list, top_signals=top)
+    console.print("[bold blue]📊 Relatório — Radar Pokémon Brasil[/bold blue]\n")
+    display_market_report(console, fetch_all(DEFAULT_DB), load_cards(cards), top_signals=top)
 
 
 @app.command(name="export")
-def export_cmd(
-    output: Path = typer.Option(
-        DEFAULT_CSV,
-        "--output",
-        "-o",
-        help="Caminho do arquivo CSV de saída.",
-    ),
-) -> None:
-    """Exporta resultados do SQLite para CSV."""
+def export_cmd(output: Path = typer.Option(DEFAULT_CSV, "--output", "-o")) -> None:
     if not DEFAULT_DB.exists():
-        console.print("[red]Banco de dados não encontrado. Execute search primeiro.[/red]")
+        console.print("[red]Execute search primeiro.[/red]")
         raise typer.Exit(1)
-
     path = export_to_csv(output, DEFAULT_DB)
-    count = len(fetch_all(DEFAULT_DB))
-    console.print(f"[green]✓ {count} resultados exportados para {path}[/green]")
+    console.print(f"[green]✓ {len(fetch_all(DEFAULT_DB))} linhas → {path}[/green]")
 
 
 @app.command("reset-db")
-def reset_db(
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-y",
-        help="Apaga sem pedir confirmação.",
-    ),
-) -> None:
-    """Apaga todos os dados de data/radar.db e data/radar_results.csv."""
+def reset_db(force: bool = typer.Option(False, "--force", "-y")) -> None:
     if not force:
-        console.print(
-            "[yellow]Isso vai apagar TODOS os resultados salvos em:[/yellow]\n"
-            f"  • {DEFAULT_DB}\n"
-            f"  • {DEFAULT_CSV}\n"
-        )
-        confirmed = typer.confirm("Deseja continuar?")
-        if not confirmed:
-            console.print("[dim]Operação cancelada.[/dim]")
+        console.print(f"[yellow]Apagar {DEFAULT_DB} e {DEFAULT_CSV}?[/yellow]")
+        if not typer.confirm("Continuar?"):
             raise typer.Exit(0)
-
     reset_all_data(DEFAULT_DB, DEFAULT_CSV)
-    console.print("[green]✓ Banco e CSV resetados com sucesso.[/green]")
+    console.print("[green]✓ Banco e CSV resetados.[/green]")
+
+
+@app.command()
+def doctor() -> None:
+    """Diagnóstico geral: conectores, banco, CSV, .env e configs."""
+    run_doctor(console, persist=True)
+
+
+@app.command("source-status")
+def source_status() -> None:
+    """Último status conhecido de cada conector (connector_health)."""
+    rows = fetch_latest_by_source()
+    if not rows:
+        console.print("[yellow]Sem histórico. Rode [bold]doctor[/bold] primeiro.[/yellow]")
+        raise typer.Exit(0)
+
+    table = Table(title="📡 Status dos conectores", show_lines=True)
+    table.add_column("Fonte")
+    table.add_column("Status")
+    table.add_column("data_mode")
+    table.add_column("HTTP")
+    table.add_column("Testado em")
+    table.add_column("Mensagem", max_width=30)
+    table.add_column("Próxima ação", max_width=28)
+
+    for row in rows:
+        st = row["status"]
+        style = {"OK": "green", "WARNING": "yellow", "ERROR": "red"}.get(st, "white")
+        table.add_row(
+            row["source"],
+            f"[{style}]{st}[/{style}]",
+            row["data_mode"],
+            str(row["http_status"] or "—"),
+            (row["tested_at"] or "")[:19],
+            (row["message"] or "")[:60],
+            (row.get("next_action") or "")[:60],
+        )
+    console.print(table)
 
 
 @app.command("test-mercadolivre")
 def test_mercadolivre(
-    query: str = typer.Option(
-        "carta pokemon charizard",
-        "--query",
-        "-q",
-        help="Termo de busca para testar na API do Mercado Livre.",
-    ),
-    site_id: str = typer.Option(
-        "MLB",
-        "--site-id",
-        help="Site do Mercado Livre (MLB = Brasil).",
-    ),
+    query: str = typer.Option("carta pokemon charizard", "--query", "-q"),
+    site_id: str = typer.Option("MLB", "--site-id"),
 ) -> None:
-    """
-    Diagnostica o conector do Mercado Livre sem salvar no banco.
+    console.print("[bold blue]🔧 Diagnóstico — Mercado Livre[/bold blue]\n")
+    diag = diagnose_ml(query=query, site_id=site_id)
+    health = mercado_livre_to_health(diag)
+    save_health_check(health)
 
-    Útil para validar se a API está acessível neste ambiente/rede.
-    """
-    console.print(
-        "[bold blue]🔧 Diagnóstico — Mercado Livre[/bold blue]\n"
-        "[dim]Nenhum dado será salvo no banco.[/dim]\n"
-    )
-
-    result = diagnose_search(query=query, site_id=site_id)
-
-    console.print(f"[bold]URL:[/bold]\n{result.url}\n")
-    status = result.status_code if result.status_code is not None else "—"
-    status_style = "green" if result.status_code == 200 else "red"
-    console.print(f"[bold]Status HTTP:[/bold] [{status_style}]{status}[/{status_style}]\n")
-
-    if result.error_message:
-        console.print(f"[bold red]Erro de rede:[/bold red] {result.error_message}\n")
-
-    preview = result.response_preview or "(resposta vazia)"
-    console.print(f"[bold]Primeiros 500 caracteres da resposta:[/bold]\n[dim]{preview}[/dim]\n")
-
-    json_label = "[green]sim[/green]" if result.is_valid_json else "[red]não[/red]"
-    console.print(f"[bold]JSON válido?[/bold] {json_label}")
-
-    if result.json_top_level_keys:
-        console.print(f"[bold]Chaves do JSON:[/bold] {', '.join(result.json_top_level_keys)}")
-    if result.results_count is not None:
-        console.print(f"[bold]Anúncios na resposta:[/bold] {result.results_count}")
-
-    if result.suggestions:
-        console.print("\n[bold]Possíveis causas / próximos passos:[/bold]")
-        for tip in result.suggestions:
-            console.print(f"  • {tip}")
-
-    console.print(
-        Panel(
-            "Diagnóstico concluído. Nada foi gravado em data/radar.db.",
-            border_style="blue",
-            title="ℹ️ Apenas teste",
-        )
-    )
+    console.print(f"[bold]URL:[/bold]\n{diag.url}\n")
+    console.print(f"[bold]Status:[/bold] {diag.status_code}")
+    console.print(f"[bold]Forbidden:[/bold] {'sim' if diag.is_forbidden else 'não'}")
+    console.print(f"[dim]{diag.response_preview[:500]}[/dim]\n")
+    for tip in diag.suggestions:
+        console.print(f"  • {tip}")
+    console.print("\n[dim]Salvo em connector_health (não grava radar_results).[/dim]")
 
 
 @app.command("test-reddit")
 def test_reddit(
-    query: str = typer.Option(
-        "pokemon tcg brasil charizard",
-        "--query",
-        "-q",
-        help="Termo de busca para testar no Reddit.",
-    ),
-    subreddit: str = typer.Option(
-        "",
-        "--subreddit",
-        "-r",
-        help="Subreddit opcional (ex.: PokemonTCG). Vazio = busca global.",
-    ),
+    query: str = typer.Option("pokemon tcg brasil charizard", "--query", "-q"),
+    subreddit: str = typer.Option("", "--subreddit", "-r"),
 ) -> None:
-    """
-    Diagnostica o conector do Reddit sem salvar no banco.
+    console.print("[bold blue]🔧 Diagnóstico — Reddit[/bold blue]\n")
+    diag = diagnose_reddit(query=query, subreddit=subreddit.strip() or None)
+    health = reddit_to_health(diag)
+    save_health_check(health)
 
-    Testa o endpoint JSON público (GET) usado pelo MVP.
-    """
-    console.print(
-        "[bold blue]🔧 Diagnóstico — Reddit[/bold blue]\n"
-        "[dim]Nenhum dado será salvo no banco.[/dim]\n"
-    )
-
-    sub = subreddit.strip() or None
-    result = diagnose_reddit(query=query, subreddit=sub)
-
-    console.print(f"[bold]Método:[/bold] {result.method}")
-    console.print(f"[bold]URL:[/bold]\n{result.url}\n")
-    console.print(f"[bold]User-Agent:[/bold] [dim]{result.user_agent}[/dim]\n")
-
-    status = result.status_code if result.status_code is not None else "—"
-    status_style = "green" if result.status_code == 200 else "red"
-    console.print(f"[bold]Status HTTP:[/bold] [{status_style}]{status}[/{status_style}]\n")
-
-    if result.error_message:
-        console.print(f"[bold red]Erro de rede:[/bold red] {result.error_message}\n")
-
-    preview = result.response_preview or "(resposta vazia)"
-    console.print(f"[bold]Primeiros 500 caracteres da resposta:[/bold]\n[dim]{preview}[/dim]\n")
-
-    json_label = "[green]sim[/green]" if result.is_valid_json else "[red]não[/red]"
-    console.print(f"[bold]JSON válido?[/bold] {json_label}")
-    if result.posts_count is not None:
-        console.print(f"[bold]Posts na resposta:[/bold] {result.posts_count}")
-
-    oauth_label = "[yellow]sim[/yellow]" if result.needs_oauth else "[green]não[/green]"
-    console.print(f"\n[bold]Precisa configurar API/OAuth?[/bold] {oauth_label}")
-    console.print(f"[dim]{result.oauth_message}[/dim]")
-
-    if result.suggestions:
-        console.print("\n[bold]Possíveis causas / próximos passos:[/bold]")
-        for tip in result.suggestions:
-            console.print(f"  • {tip}")
-
-    console.print(
-        Panel(
-            "Diagnóstico concluído. Nada foi gravado em data/radar.db.",
-            border_style="blue",
-            title="ℹ️ Apenas teste",
-        )
-    )
+    console.print(f"[bold]Método:[/bold] {diag.method} | [bold]Modo:[/bold] {diag.auth_mode}")
+    console.print(f"[bold]URL:[/bold]\n{diag.url}\n")
+    console.print(f"[bold]Status:[/bold] {diag.status_code}")
+    console.print(f"[bold]OAuth necessário?[/bold] {'sim' if diag.needs_oauth else 'não'}")
+    console.print(f"[dim]{diag.oauth_message}[/dim]")
+    console.print(f"[dim]{diag.response_preview[:500]}[/dim]\n")
+    for tip in diag.suggestions:
+        console.print(f"  • {tip}")
+    console.print("\n[dim]Salvo em connector_health (não grava radar_results).[/dim]")
 
 
 def main() -> None:
-    """Ponto de entrada da CLI."""
     app()
 
 

@@ -32,11 +32,14 @@ source .venv/bin/activate
 # 3. Instalar
 pip install -r requirements.txt
 
-# 4. Primeira busca de teste (funciona sem internet)
-python3 -m src search --mock --limit 5
+# 4. Primeiro teste — diagnóstico do ambiente
+python3 -m src.main doctor
 
-# 5. Ver relatório de mercado
-python3 -m src report
+# 5. Demonstração rápida com dados simulados
+python3 -m src.main search --mock-only --limit 5
+
+# 6. Ver relatório de mercado
+python3 -m src.main report
 ```
 
 No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.venv\Scripts\activate`.
@@ -45,8 +48,36 @@ No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.
 
 | Sistema | Comando |
 |---------|---------|
-| Linux/Mac | `./radar.sh search --mock --limit 5` |
-| Windows | `radar.bat search --mock --limit 5` |
+| Linux/Mac | `./radar.sh doctor` |
+| Windows | `radar.bat doctor` |
+
+---
+
+## Primeiro teste (recomendado)
+
+```bash
+python3 -m src.main doctor
+```
+
+O `doctor` verifica Mercado Livre, Reddit, SQLite, CSV, `.env` e arquivos de config. Mostra uma tabela com status, modo dos dados e próxima ação.
+
+**Busca apenas com dados reais:**
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main search --cards config/cards.yml --limit 20 --live-only
+python3 -m src.main report
+```
+
+**Demonstração com mock (offline):**
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main search --cards config/cards.yml --limit 20 --mock-only
+python3 -m src.main report
+```
+
+Guia completo de validação: [`docs/VALIDACAO_DADOS_REAIS.md`](docs/VALIDACAO_DADOS_REAIS.md)
 
 ---
 
@@ -126,13 +157,13 @@ Edite `.env` apenas se quiser personalizar o Reddit ou habilitar YouTube.
 
 **Dados reais (validação de mercado — recomendado):**
 ```bash
-python3 -m src.main search --cards config/cards.yml --limit 20 --no-mock
+python3 -m src.main search --cards config/cards.yml --limit 20 --live-only
 ```
 Sem fallback simulado. Se Reddit ou Mercado Livre falharem, a fonte retorna **zero resultados** e mostra um aviso amigável.
 
-**Dados simulados (teste offline):**
+**Dados simulados (teste offline / demonstração):**
 ```bash
-python3 -m src.main search --mock --limit 5
+python3 -m src.main search --mock-only --limit 5
 ```
 Todos os resultados são marcados como `data_mode=mock`.
 
@@ -140,12 +171,12 @@ Todos os resultados são marcados como `data_mode=mock`.
 ```bash
 python3 -m src.main search --limit 20
 ```
-Tenta APIs reais primeiro; se falharem, usa mock automaticamente (útil para demonstração).
+Equivalente a `--allow-mock`: tenta APIs reais primeiro; se falharem, usa mock automaticamente.
 
 Atalhos:
 ```bash
-./radar.sh search --no-mock --limit 20    # Linux/Mac
-radar.bat search --mock --limit 5         # Windows
+./radar.sh search --live-only --limit 20    # Linux/Mac
+radar.bat search --mock-only --limit 5      # Windows
 ```
 
 ### Limpar o banco antes de uma nova validação
@@ -176,9 +207,10 @@ Cada resultado tem o campo **`data_mode`**:
 | `mock` | Dado simulado — **não use para decisão de mercado** |
 | `manual_import` | Importado manualmente (ex.: exportação Discord) |
 
-No **relatório**, o painel **"Modo dos dados"** mostra:
+No **relatório**, a seção **VALIDAÇÃO DOS DADOS** (no topo) mostra:
 - quantos resultados são `live`, `mock` e `manual_import`
-- um **aviso vermelho grande** se houver qualquer dado `mock`
+- quantas fontes falharam na última busca
+- um **aviso vermelho** se houver qualquer dado `mock`
 
 No **CSV** (`data/radar_results.csv`), a coluna `data_mode` indica a origem de cada linha.
 
@@ -239,14 +271,17 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 
 | Comando | O que faz |
 |---------|-----------|
+| `python3 -m src.main doctor` | Diagnóstico geral (conectores, banco, configs) |
+| `python3 -m src.main source-status` | Último status de cada conector |
 | `python3 -m src.main search` | Busca sinais nas fontes configuradas |
-| `python3 -m src.main search --no-mock` | Apenas dados reais (validação) |
-| `python3 -m src.main search --mock` | Apenas dados simulados |
+| `python3 -m src.main search --live-only` | Apenas dados reais (validação) |
+| `python3 -m src.main search --allow-mock` | Padrão — permite fallback mock |
+| `python3 -m src.main search --mock-only` | Apenas dados simulados |
 | `python3 -m src.main report` | Relatório de inteligência de mercado |
 | `python3 -m src.main export` | Exporta CSV |
 | `python3 -m src.main reset-db` | Apaga banco e CSV (com confirmação) |
-| `python3 -m src.main test-mercadolivre` | Diagnostica API do Mercado Livre (não salva no banco) |
-| `python3 -m src.main test-reddit` | Diagnostica API do Reddit (não salva no banco) |
+| `python3 -m src.main test-mercadolivre` | Diagnostica API do Mercado Livre |
+| `python3 -m src.main test-reddit` | Diagnostica API do Reddit |
 | `python3 -m src.main --help` | Lista todas as opções |
 
 ### Diagnosticar Mercado Livre
@@ -257,7 +292,7 @@ Se a busca real falhar, teste só o conector:
 python3 -m src.main test-mercadolivre --query "carta pokemon charizard"
 ```
 
-O comando mostra URL, status HTTP, trecho da resposta, se o JSON é válido e sugestões de correção — **sem gravar no banco**.
+O comando mostra URL, status HTTP, trecho da resposta e sugestões — salva o diagnóstico em `connector_health` (não grava `radar_results`).
 
 ### Diagnosticar Reddit
 
@@ -265,7 +300,7 @@ O comando mostra URL, status HTTP, trecho da resposta, se o JSON é válido e su
 python3 -m src.main test-reddit --query "pokemon tcg brasil charizard"
 ```
 
-Mostra método (GET), URL, User-Agent, status HTTP, preview da resposta, se JSON é válido e se **OAuth é necessário** — sem gravar no banco.
+Mostra método (GET), URL, modo (OAuth/público), status HTTP e preview da resposta — salva em `connector_health`.
 
 Subreddit opcional:
 ```bash
@@ -276,8 +311,9 @@ python3 -m src.main test-reddit -q "charizard" --subreddit PokemonTCG
 
 | Opção | Descrição |
 |-------|-----------|
-| `--mock` | Apenas dados simulados (`data_mode=mock`) |
-| `--no-mock` | Sem fallback mock se APIs falharem |
+| `--live-only` | Apenas dados reais; sem fallback mock |
+| `--allow-mock` | Padrão — permite mock se APIs falharem |
+| `--mock-only` | Apenas dados simulados (`data_mode=mock`) |
 | `--limit 20` | Máximo por carta por fonte |
 
 ---
@@ -300,6 +336,9 @@ radar-pokemon-brasil/
 │   ├── reporting.py        # Relatório visual no terminal
 │   ├── scoring.py          # Classificação de intenção
 │   └── connectors/         # Reddit, Mercado Livre, etc.
+├── docs/
+│   ├── VALIDACAO_DADOS_REAIS.md  # Guia de validação live vs mock
+│   └── future_connectors_meta.md
 ├── data/
 │   ├── radar.db            # Banco (gerado automaticamente)
 │   └── radar_results.csv   # Exportação CSV
@@ -312,13 +351,13 @@ radar-pokemon-brasil/
 
 | Fonte | Status | Precisa de chave? |
 |-------|--------|-------------------|
-| Reddit | ✅ Ativo | Não (User-Agent opcional no `.env`) |
-| Mercado Livre | ✅ Ativo | Não |
+| Reddit | ✅ Ativo | User-Agent no `.env`; OAuth opcional |
+| Mercado Livre | ✅ Ativo | API pública; `ML_ACCESS_TOKEN` opcional |
 | YouTube | ⚙️ Opcional | Sim (`YOUTUBE_API_KEY`) |
 | Discord | 📋 Futuro | Importação manual |
 | Facebook/Instagram | ❌ Futuro | Ver `docs/future_connectors_meta.md` |
 
-> **Nota:** APIs podem bloquear IPs de datacenter. Em casa costuma funcionar melhor. Se falhar, use `--mock` ou deixe o fallback automático ligado (padrão).
+> **Nota:** APIs podem bloquear IPs de datacenter (HTTP 403). Rode `doctor` primeiro. Em rede residencial costuma funcionar melhor. Use `--mock-only` apenas para demonstração.
 
 ---
 
@@ -352,7 +391,8 @@ python3 -m pytest tests/ -v
 | `ModuleNotFoundError: src` | Execute da **pasta raiz** do projeto |
 | `pip: command not found` | Use `python3 -m pip install -r requirements.txt` |
 | `Permission denied: ./radar.sh` | Rode `chmod +x radar.sh` |
-| Reddit/ML sem resultados com `--no-mock` | Normal em datacenter; rode de rede residencial |
+| Reddit/ML sem resultados com `--live-only` | Normal em datacenter; rode `doctor` e teste em rede residencial |
+| HTTP 403 no doctor | Bloqueio da API — não é dado real; veja `docs/VALIDACAO_DADOS_REAIS.md` |
 | Relatório com aviso vermelho | Há dados `mock` — não use para decisão de mercado |
 | Quer zerar histórico acumulado | `python3 -m src.main reset-db` |
 | PowerShell bloqueia ativação | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |

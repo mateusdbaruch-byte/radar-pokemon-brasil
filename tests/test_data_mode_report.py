@@ -27,8 +27,8 @@ class TestDataModeReport:
         console = Console(file=output, width=120, force_terminal=True)
         display_data_mode_summary(console, [_make_result(DataMode.MOCK)])
         text = output.getvalue().replace("\n", " ")
-        assert "DADOS SIMULADOS" in text
-        assert "decisão de mercado" in text
+        assert "dados simulados" in text
+        assert "decisão" in text and "mercado" in text
 
     def test_shows_live_counts(self):
         output = StringIO()
@@ -39,4 +39,4 @@ class TestDataModeReport:
         )
         text = output.getvalue()
         assert "live" in text
-        assert "Todos os dados são reais" in text
+        assert "apenas em dados live" in text

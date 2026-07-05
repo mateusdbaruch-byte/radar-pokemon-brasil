@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +34,17 @@ class MLDiagnosticResult:
     results_count: int | None
     error_message: str | None
     suggestions: list[str]
+    is_forbidden: bool = False
+
+
+def _response_is_forbidden(status_code: int | None, data: dict | None, preview: str) -> bool:
+    """Detecta resposta forbidden da API (não deve ser tratada como dado real)."""
+    if status_code == 403:
+        return True
+    if data and isinstance(data, dict):
+        if data.get("message") == "forbidden" or data.get("error") == "forbidden":
+            return True
+    return "forbidden" in preview.lower() and '"message"' in preview.lower()
 
 
 def diagnose_search(
@@ -71,11 +83,14 @@ def diagnose_search(
                     results_count = len(results)
         except (json.JSONDecodeError, ValueError):
             is_valid_json = False
+            data = None
 
+        forbidden = _response_is_forbidden(response.status_code, data if is_valid_json else None, preview)
         suggestions = _build_suggestions(
             status_code=response.status_code,
             is_valid_json=is_valid_json,
             error_message=None,
+            is_forbidden=forbidden,
         )
 
         return MLDiagnosticResult(
@@ -87,12 +102,14 @@ def diagnose_search(
             results_count=results_count,
             error_message=None,
             suggestions=suggestions,
+            is_forbidden=forbidden,
         )
     except requests.RequestException as exc:
         suggestions = _build_suggestions(
             status_code=None,
             is_valid_json=False,
             error_message=str(exc),
+            is_forbidden=False,
         )
         return MLDiagnosticResult(
             url=full_url,
@@ -103,6 +120,7 @@ def diagnose_search(
             results_count=None,
             error_message=str(exc),
             suggestions=suggestions,
+            is_forbidden=False,
         )
 
 
@@ -110,6 +128,7 @@ def _build_suggestions(
     status_code: int | None,
     is_valid_json: bool,
     error_message: str | None,
+    is_forbidden: bool = False,
 ) -> list[str]:
     """Gera sugestões amigáveis com base no status HTTP e no corpo."""
     tips: list[str] = []
@@ -126,11 +145,11 @@ def _build_suggestions(
         tips.append("API respondeu com JSON válido — o conector deve funcionar neste ambiente.")
         return tips
 
-    if status_code == 403:
+    if status_code == 403 or is_forbidden:
         tips.extend([
-            "HTTP 403 — acesso negado pela API do Mercado Livre.",
-            "IPs de datacenter/cloud costumam ser bloqueados; teste de rede residencial.",
-            "Evite muitas requisições seguidas (rate limit).",
+            "HTTP 403 / forbidden — acesso negado pela API do Mercado Livre.",
+            "Não salve estes resultados como dados reais (data_mode deve permanecer unavailable).",
+            "Teste em rede residencial; configure ML_ACCESS_TOKEN se tiver app oficial.",
         ])
     elif status_code == 429:
         tips.extend([
@@ -169,14 +188,18 @@ class MercadoLivreConnector:
         self.category = category
         self.request_delay = request_delay
         self.session = requests.Session()
-        # User-Agent descritivo ajuda a evitar bloqueios em alguns ambientes
-        self.session.headers.update({
-            "User-Agent": "RadarPokemonBrasil/1.0 (MVP; educational)",
+        headers = {
+            "User-Agent": "RadarPokemonBrasil/1.0 (+https://github.com; MVP educacional)",
             "Accept": "application/json",
-        })
+            "Accept-Language": "pt-BR,pt;q=0.9",
+        }
+        token = os.getenv("ML_ACCESS_TOKEN", "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        self.session.headers.update(headers)
 
     def _search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
-        """Busca anúncios no Mercado Livre."""
+        """Busca anúncios no Mercado Livre via API oficial."""
         url = ML_SEARCH_URL.format(site_id=self.site_id)
         params: dict[str, Any] = {
             "q": query,
@@ -187,9 +210,32 @@ class MercadoLivreConnector:
 
         try:
             response = self.session.get(url, params=params, timeout=15)
-            response.raise_for_status()
+
+            if response.status_code == 429:
+                logger.warning("Mercado Livre rate limit (429); aguardando 3s...")
+                time.sleep(3)
+                response = self.session.get(url, params=params, timeout=15)
+
+            if response.status_code == 403:
+                logger.warning(
+                    "Mercado Livre 403 forbidden — resposta não será salva como dado real. "
+                    "Teste em rede residencial."
+                )
+                return []
+
+            if response.status_code != 200:
+                logger.error("Mercado Livre HTTP %s — busca ignorada", response.status_code)
+                return []
+
             data = response.json()
+            if _response_is_forbidden(response.status_code, data, response.text[:200]):
+                logger.warning("Mercado Livre retornou forbidden no JSON — ignorando resultados")
+                return []
+
             return data.get("results", [])
+        except requests.Timeout:
+            logger.error("Mercado Livre: timeout de rede (15s)")
+            return []
         except requests.RequestException as exc:
             logger.error("Erro na busca Mercado Livre: %s", exc)
             return []

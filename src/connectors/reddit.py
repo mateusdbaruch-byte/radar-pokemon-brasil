@@ -36,8 +36,47 @@ class RedditDiagnosticResult:
     posts_count: int | None
     needs_oauth: bool
     oauth_message: str
+    auth_mode: str
     error_message: str | None
     suggestions: list[str]
+
+
+def _reddit_auth_mode() -> str:
+    """Indica modo de autenticação configurado."""
+    if os.getenv("REDDIT_CLIENT_ID", "").strip() and os.getenv("REDDIT_CLIENT_SECRET", "").strip():
+        return "oauth"
+    return "public"
+
+
+def _apply_reddit_auth(session: requests.Session, user_agent: str) -> str:
+    """
+    Aplica OAuth Bearer se credenciais existirem no .env.
+
+    Retorna auth_mode: oauth | public
+    """
+    session.headers.update({"User-Agent": user_agent})
+    client_id = os.getenv("REDDIT_CLIENT_ID", "").strip()
+    client_secret = os.getenv("REDDIT_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return "public"
+
+    try:
+        token_resp = session.post(
+            "https://www.reddit.com/api/v1/access_token",
+            auth=(client_id, client_secret),
+            data={"grant_type": "client_credentials"},
+            headers={"User-Agent": user_agent},
+            timeout=15,
+        )
+        if token_resp.status_code == 200:
+            token = token_resp.json().get("access_token")
+            if token:
+                session.headers.update({"Authorization": f"Bearer {token}"})
+                return "oauth"
+        logger.warning("Reddit OAuth falhou (%s) — usando modo público", token_resp.status_code)
+    except requests.RequestException as exc:
+        logger.warning("Reddit OAuth erro: %s — usando modo público", exc)
+    return "public"
 
 
 def diagnose_search(
@@ -53,7 +92,7 @@ def diagnose_search(
     """
     ua = user_agent or os.getenv("REDDIT_USER_AGENT", DEFAULT_USER_AGENT)
     session = requests.Session()
-    session.headers.update({"User-Agent": ua})
+    auth_mode = _apply_reddit_auth(session, ua)
 
     params: dict[str, Any] = {
         "q": query,
@@ -110,6 +149,7 @@ def diagnose_search(
             posts_count=posts_count,
             needs_oauth=needs_oauth,
             oauth_message=oauth_message,
+            auth_mode=auth_mode,
             error_message=None,
             suggestions=suggestions,
         )
@@ -137,6 +177,7 @@ def diagnose_search(
             posts_count=None,
             needs_oauth=needs_oauth,
             oauth_message=oauth_message,
+            auth_mode=auth_mode,
             error_message=str(exc),
             suggestions=suggestions,
         )
@@ -263,7 +304,11 @@ class RedditConnector:
         self.query_suffix = query_suffix
         self.request_delay = request_delay
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": self.user_agent})
+        self.auth_mode = _apply_reddit_auth(self.session, self.user_agent)
+
+    @property
+    def uses_oauth(self) -> bool:
+        return self.auth_mode == "oauth"
 
     def _search(
         self,
@@ -286,10 +331,18 @@ class RedditConnector:
         try:
             response = self.session.get(url, params=params, timeout=15)
             if response.status_code == 429:
-                logger.warning("Reddit rate limit atingido; aguardando...")
+                logger.warning("Reddit rate limit (429); aguardando 5s...")
                 time.sleep(5)
                 response = self.session.get(url, params=params, timeout=15)
-            response.raise_for_status()
+            if response.status_code == 403:
+                logger.warning(
+                    "Reddit 403 — bloqueado (%s). Configure User-Agent/OAuth ou outra rede.",
+                    self.auth_mode,
+                )
+                return []
+            if response.status_code != 200:
+                logger.error("Reddit HTTP %s — busca ignorada", response.status_code)
+                return []
             data = response.json()
             children = data.get("data", {}).get("children", [])
             return [c.get("data", {}) for c in children if c.get("data")]

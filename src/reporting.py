@@ -18,6 +18,7 @@ from src.market_intelligence import (
 from src.models import DataMode, RadarResult
 from src.normalizer import normalize_card_name
 from src.database import count_by_data_mode
+from src.connector_health import fetch_latest_search_log
 
 RECOMMENDATION_PRIORITY: dict[Recommendation, int] = {
     "boa demanda": 4,
@@ -147,38 +148,42 @@ def analyze_card_empty(card_name: str) -> CardMarketInsight:
     return analyze_card(card_name, [])
 
 
-def display_data_mode_summary(console: Console, results: list[RadarResult]) -> None:
-    """Exibe contagem por origem dos dados e aviso se houver mock."""
+def display_validation_section(console: Console, results: list[RadarResult]) -> None:
+    """Exibe VALIDAÇÃO DOS DADOS no topo do relatório."""
     counts = count_by_data_mode(results)
     live = counts.get(DataMode.LIVE.value, 0)
     mock = counts.get(DataMode.MOCK.value, 0)
     manual = counts.get(DataMode.MANUAL_IMPORT.value, 0)
-    total = live + mock + manual
+
+    search_log = fetch_latest_search_log()
+    source_errors = int(search_log["source_errors"]) if search_log else 0
 
     lines = [
-        f"[bold]Origem dos dados[/bold] ({total} resultados no relatório):",
-        f"  • [green]live[/green] (APIs reais): [bold]{live}[/bold]",
-        f"  • [yellow]mock[/yellow] (simulados): [bold]{mock}[/bold]",
-        f"  • [cyan]manual_import[/cyan] (importação manual): [bold]{manual}[/bold]",
+        "[bold]VALIDAÇÃO DOS DADOS[/bold]",
+        f"  • live: [bold]{live}[/bold] resultados",
+        f"  • mock: [bold]{mock}[/bold] resultados",
+        f"  • manual_import: [bold]{manual}[/bold] resultados",
+        f"  • fontes com erro: [bold]{source_errors}[/bold]",
     ]
+    console.print(Panel("\n".join(lines), title="🔖 Validação", border_style="blue"))
 
     if mock > 0:
         console.print()
         console.print(
             Panel(
-                "[bold red]ATENÇÃO: este relatório contém dados simulados "
-                "e não deve ser usado para decisão de mercado.[/bold red]\n\n"
-                f"Dados simulados (mock): {mock} de {total} resultados.\n"
-                "Para validação real, rode: [bold]python3 -m src.main search --no-mock[/bold] "
-                "e verifique se [bold]live[/bold] > 0.",
+                "[bold red]ATENÇÃO: este relatório contém dados simulados. "
+                "Não use para decisão real de mercado.[/bold red]",
                 border_style="red",
                 title="⚠️ DADOS SIMULADOS",
             )
         )
-    elif total > 0 and live == total:
-        lines.append("\n[green]✓ Todos os dados são reais (live).[/green]")
+    elif live > 0 and mock == 0:
+        console.print("\n[green]✓ Relatório baseado apenas em dados live.[/green]")
 
-    console.print(Panel("\n".join(lines), title="🔖 Modo dos dados", border_style="blue"))
+
+def display_data_mode_summary(console: Console, results: list[RadarResult]) -> None:
+    """Alias — mantido para compatibilidade com testes."""
+    display_validation_section(console, results)
 
 
 def display_executive_summary(console: Console, summary: MarketSummary) -> None:
@@ -322,7 +327,7 @@ def display_market_report(
         console.print("[yellow]Nenhum dado para análise de mercado.[/yellow]")
         return
 
-    display_data_mode_summary(console, results)
+    display_validation_section(console, results)
     console.print()
     display_executive_summary(console, summary)
     display_highlights(console, summary.highlight_cards)
