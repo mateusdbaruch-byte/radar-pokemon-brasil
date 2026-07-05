@@ -64,6 +64,7 @@ from src.opportunity_db import (
 )
 from src.opportunity_models import HumanReview, RejectedReview, WishlistLead
 from src.opportunity_reporting import (
+    display_card_radar,
     display_opportunity_inbox,
     display_opportunity_report,
     display_precision_report,
@@ -73,6 +74,7 @@ from src.opportunity_reporting import (
     display_rejected_inbox,
     display_rejected_report,
     display_review_opportunities,
+    display_unified_opportunity_report,
 )
 from src.search_profiles import get_search_profile, list_profile_names
 from src.search_budget import (
@@ -527,6 +529,115 @@ def profile_quality_test_cmd(
     console.print(
         "\n[dim]Próximo: rejected-inbox → query-performance-report → precision-report[/dim]"
     )
+
+
+ALL_SEARCH_PROFILES = ("demand_leads", "supply_deals", "market_reference")
+
+
+@app.command("run-all-profiles")
+def run_all_profiles_cmd(
+    cards: str = typer.Option(
+        "Charizard,Umbreon,Mew",
+        "--cards",
+        "-c",
+        help="Cartas separadas por vírgula",
+    ),
+    limit: int = typer.Option(5, "--limit", "-l"),
+    max_queries: int = typer.Option(0, "--max-queries"),
+    budget_mode: BudgetMode = typer.Option(
+        BudgetMode.ECONOMY,
+        "--budget-mode",
+        help="normal ou economy (recomendado para rodar os 3 perfis)",
+    ),
+    daily_budget: int = typer.Option(0, "--daily-budget", help="Limite diário (0 = .env)"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    cache_ttl_hours: float = typer.Option(24.0, "--cache-ttl-hours"),
+) -> None:
+    """Executa demand_leads, supply_deals e market_reference com cache/orçamento."""
+    card_list = parse_card_list(cards)
+    if not card_list:
+        console.print("[red]Informe cartas com --cards[/red]")
+        raise typer.Exit(1)
+
+    query_cap = max_queries if max_queries > 0 else None
+    console.print(
+        f"[bold blue]🛰️ Run All Profiles — radar híbrido[/bold blue]\n"
+        f"[dim]Cartas: {', '.join(card_list)} | limit={limit} | "
+        f"budget-mode={budget_mode.value}[/dim]\n"
+    )
+
+    total_saved = 0
+    total_merged = 0
+
+    for profile_name in ALL_SEARCH_PROFILES:
+        console.print(f"\n[bold cyan]▶ Perfil: {profile_name}[/bold cyan]")
+        search_profile = get_search_profile(profile_name)
+        if not search_profile:
+            console.print(f"[red]Perfil não encontrado: {profile_name}[/red]")
+            continue
+
+        result = scan_opportunities(
+            card_list,
+            "web_search",
+            limit=limit,
+            max_queries=query_cap,
+            profile=profile_name,
+            budget_mode=budget_mode,
+            budget_ctx=_build_budget_ctx(
+                profile=profile_name,
+                no_cache=no_cache,
+                cache_ttl_hours=cache_ttl_hours,
+                daily_budget=daily_budget if daily_budget > 0 else None,
+                budget_mode=budget_mode,
+            ),
+            watchlist_path=DEFAULT_WATCHLIST,
+        )
+
+        for msg in result.messages:
+            console.print(f"[dim]  • {msg}[/dim]")
+
+        if result.opportunities:
+            save_result = save_opportunities(result.opportunities)
+            total_saved += save_result.saved
+            total_merged += save_result.merged
+            console.print(
+                f"[green]  ✓ {save_result.saved + save_result.merged} "
+                f"oportunidades ({profile_name})[/green]"
+            )
+        else:
+            console.print(f"[yellow]  Nenhuma oportunidade salva em {profile_name}[/yellow]")
+
+        if result.web_search_stats and result.web_search_stats.budget_stopped:
+            console.print(
+                f"[yellow]Orçamento atingido — perfis restantes não executados.[/yellow]"
+            )
+            break
+
+    console.print(
+        f"\n[bold]Total salvo nesta execução:[/bold] "
+        f"{total_saved + total_merged} ({total_saved} novas, {total_merged} mescladas)\n"
+    )
+
+    console.print("[bold]Relatórios gerados:[/bold]")
+    display_opportunity_inbox(console, limit=15)
+    console.print()
+    display_query_performance_report(console, limit=30)
+    console.print()
+    display_unified_opportunity_report(console)
+
+
+@app.command("unified-opportunity-report")
+def unified_opportunity_report_cmd() -> None:
+    """Relatório unificado cruzando demanda, oferta e referência por carta."""
+    display_unified_opportunity_report(console)
+
+
+@app.command("card-radar")
+def card_radar_cmd(
+    card: str = typer.Option(..., "--card", "-c", help="Nome da carta"),
+) -> None:
+    """Visão completa de uma carta no radar híbrido."""
+    display_card_radar(console, card.strip())
 
 
 @app.command("scan-quality-test")

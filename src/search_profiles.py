@@ -67,6 +67,7 @@ class SearchProfile:
             intent_filter=list(self.intent_filter) if self.intent_filter else None,
             allowed_domains=self.allowed_domains() or None,
             profile_name=self.name,
+            market_reference_mode=self.name == "market_reference",
         )
 
 

@@ -83,6 +83,7 @@ class Opportunity(BaseModel):
     human_review: str = ""
     human_review_notes: str = ""
     reviewed_at: Optional[datetime] = None
+    profile: str = ""
 
     def to_db_row(self) -> dict[str, Any]:
         return {
@@ -118,6 +119,7 @@ class Opportunity(BaseModel):
             "human_review": self.human_review,
             "human_review_notes": self.human_review_notes,
             "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "profile": self.profile,
         }
 
     @classmethod
@@ -164,6 +166,7 @@ class Opportunity(BaseModel):
                 if row.get("reviewed_at")
                 else None
             ),
+            profile=row.get("profile") or "",
         )
 
     def set_raw_data(self, data: Any) -> None:

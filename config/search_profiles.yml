@@ -71,7 +71,10 @@ market_reference:
   query_templates:
     - 'site:ligapokemon.com.br "{card}"'
     - 'site:mypcards.com "{card}"'
+    - 'site:bigdex.app "{card}"'
+    - 'site:bigdex.app "{card}" pokemon'
+    - 'site:droper.app "{card}" pokemon'
     - 'site:mercadolivre.com.br "{card}" "carta pokemon"'
     - 'site:olx.com.br "{card}" "pokemon"'
     - 'site:shopee.com.br "{card}" "pokemon"'
-    - 'site:bigdex.app "{card}"'
+    - 'site:enjoei.com.br "{card}" "pokemon"'

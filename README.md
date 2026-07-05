@@ -63,6 +63,27 @@ python3 -m src.main profiles-summary
 
 Configs: `config/search_profiles.yml`, `config/domain_groups.yml`
 
+#### Fluxo recomendado — radar híbrido (3 perfis)
+
+Calibra demanda, oferta e referência de preço em uma única execução:
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main run-all-profiles --cards Charizard,Umbreon,Mew --limit 5 --budget-mode economy
+python3 -m src.main unified-opportunity-report
+python3 -m src.main card-radar --card Charizard
+python3 -m src.main rejected-report
+python3 -m src.main query-performance-report
+```
+
+| Comando | Descrição |
+|---------|-----------|
+| `run-all-profiles` | Roda demand_leads + supply_deals + market_reference com cache/orçamento |
+| `unified-opportunity-report` | Cruza os 3 perfis por carta (MOS, leitura estratégica) |
+| `card-radar --card N` | Visão completa de uma carta (demanda, oferta, referência) |
+
+Cada oportunidade salva guarda o campo `profile` de origem.
+
 #### Teste de compradores
 
 ```bash
@@ -115,6 +136,9 @@ Comandos de revisão:
 | Comando | Descrição |
 |---------|-----------|
 | `profiles-summary` | Lista perfis, templates e filtros |
+| `run-all-profiles` | Executa os 3 perfis e gera relatórios unificados |
+| `unified-opportunity-report` | Radar híbrido por carta (demanda/oferta/referência) |
+| `card-radar --card N` | Visão completa de uma carta |
 | `profile-quality-test` | Teste de qualidade por perfil |
 | `scan-opportunities --profile` | Scan com perfil de busca |
 | `query-performance-report` | Performance por query |

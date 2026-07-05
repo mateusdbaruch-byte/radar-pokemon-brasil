@@ -498,6 +498,7 @@ class WebSearchConnector:
 
                 opp.data_mode = DataMode.LIVE
                 opp.why_saved = evaluation.why_saved
+                opp.profile = profile
                 enrich_opportunity(opp, evidence)
                 if evaluation.refined_type:
                     opp.opportunity_type = evaluation.refined_type

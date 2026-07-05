@@ -44,7 +44,12 @@ CREATE TABLE IF NOT EXISTS opportunities (
     grading_detected TEXT DEFAULT '',
     language_detected TEXT DEFAULT '',
     market_jargon_detected TEXT DEFAULT '',
-    negative_context_detected TEXT DEFAULT ''
+    negative_context_detected TEXT DEFAULT '',
+    domain TEXT DEFAULT '',
+    human_review TEXT DEFAULT '',
+    human_review_notes TEXT DEFAULT '',
+    reviewed_at TEXT,
+    profile TEXT DEFAULT ''
 );
 """
 
@@ -159,10 +164,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "human_review": "TEXT DEFAULT ''",
         "human_review_notes": "TEXT DEFAULT ''",
         "reviewed_at": "TEXT",
+        "profile": "TEXT DEFAULT ''",
     }
     for col, typedef in new_cols.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col} {typedef}")
+
+    if "profile" in {row[1] for row in conn.execute("PRAGMA table_info(opportunities)")}:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_opp_profile ON opportunities(profile)"
+        )
 
     rej_cols = {row[1] for row in conn.execute("PRAGMA table_info(rejected_results)")}
     rej_new_cols = {
@@ -348,19 +359,94 @@ def fetch_opportunities(
     db_path: Path | str = DEFAULT_DB,
     limit: int | None = None,
     status: str | None = None,
+    *,
+    card: str | None = None,
+    profile: str | None = None,
 ) -> list[Opportunity]:
     conn = _conn(db_path)
-    sql = "SELECT * FROM opportunities"
+    clauses: list[str] = []
     params: list[Any] = []
     if status:
-        sql += " WHERE status = ?"
+        clauses.append("status = ?")
         params.append(status)
+    if card:
+        clauses.append("normalized_card_name = ?")
+        params.append(card)
+    if profile:
+        clauses.append("profile = ?")
+        params.append(profile)
+    sql = "SELECT * FROM opportunities"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY opportunity_score DESC, collected_at DESC"
     if limit:
         sql += f" LIMIT {limit}"
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [Opportunity.from_db_row(dict(r)) for r in rows]
+
+
+def fetch_opportunities_by_card(
+    card: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> list[Opportunity]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT * FROM opportunities
+        WHERE normalized_card_name = ? OR card_name_detected = ?
+        ORDER BY opportunity_score DESC, collected_at DESC
+        """,
+        (card, card),
+    ).fetchall()
+    conn.close()
+    return [Opportunity.from_db_row(dict(r)) for r in rows]
+
+
+def fetch_distinct_opportunity_cards(db_path: Path | str = DEFAULT_DB) -> list[str]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT DISTINCT normalized_card_name
+        FROM opportunities
+        ORDER BY normalized_card_name
+        """
+    ).fetchall()
+    conn.close()
+    return [r["normalized_card_name"] for r in rows if r["normalized_card_name"]]
+
+
+def count_rejected_by_profile(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT profile, COUNT(*) as cnt
+        FROM rejected_results
+        WHERE profile IS NOT NULL AND profile != ''
+        GROUP BY profile
+        ORDER BY cnt DESC
+        """
+    ).fetchall()
+    conn.close()
+    return {r["profile"]: r["cnt"] for r in rows}
+
+
+def fetch_rejected_by_profile(
+    profile: str,
+    db_path: Path | str = DEFAULT_DB,
+    limit: int | None = None,
+) -> list[RejectedResult]:
+    conn = _conn(db_path)
+    sql = (
+        "SELECT * FROM rejected_results WHERE profile = ? "
+        "ORDER BY rejected_at DESC"
+    )
+    params: list[Any] = [profile]
+    if limit:
+        sql += f" LIMIT {limit}"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [_rejected_from_row(r) for r in rows]
 
 
 def fetch_opportunity_by_id(

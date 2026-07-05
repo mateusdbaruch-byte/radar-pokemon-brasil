@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass, field
 
 from rich.console import Console
 from rich.panel import Panel
@@ -12,6 +13,7 @@ from src.opportunity_db import (
     count_domains_by_review,
     count_human_reviews,
     count_opportunities_by_source,
+    count_rejected_by_profile,
     count_rejected_by_reason,
     count_rejected_by_reason_category,
     count_rejected_domains,
@@ -20,20 +22,188 @@ from src.opportunity_db import (
     count_saved_domains,
     count_types_by_review,
     count_unreviewed_opportunities,
+    fetch_distinct_opportunity_cards,
     fetch_false_negative_rejections,
     fetch_false_positives,
     fetch_opportunities,
+    fetch_opportunities_by_card,
     fetch_queries_with_false_negatives,
     fetch_query_runs,
+    fetch_rejected_by_profile,
     fetch_rejected_results,
     fetch_reviewed_opportunities,
     fetch_wishlist_leads,
 )
-from src.opportunity_quality import categorize_rejection_reason, rejection_label
+from src.opportunity_quality import (
+    categorize_rejection_reason,
+    extract_domain,
+    is_marketplace_domain,
+    rejection_label,
+    TCG_SPECIALIZED_DOMAINS,
+)
 from src.search_profiles import load_search_profiles
 from src.opportunity_models import Opportunity, OpportunityType
-from src.opportunity_quality import extract_domain
 from src.source_registry import SourceAccess, get_source_registry
+
+BUYER_DEMAND_TYPES = frozenset({
+    OpportunityType.BUYER_DEMAND,
+    OpportunityType.HIGH_INTENT_LEAD,
+    OpportunityType.DISCUSSION_SIGNAL,
+})
+
+SELLER_SUPPLY_TYPES = frozenset({
+    OpportunityType.SELLER_SUPPLY,
+    OpportunityType.UNDERPRICED_LISTING,
+    OpportunityType.ARBITRAGE_SIGNAL,
+})
+
+MARKET_REFERENCE_TYPES = frozenset({
+    OpportunityType.PRICE_REFERENCE,
+    OpportunityType.SUPPLY_SIGNAL,
+})
+
+COUNT_THRESHOLD = 2
+
+
+@dataclass
+class CardUnifiedStats:
+    card_name: str
+    buyer_demand_count: int = 0
+    seller_supply_count: int = 0
+    market_reference_count: int = 0
+    urgent_sale_count: int = 0
+    average_opportunity_score: float = 0.0
+    top_domains: list[tuple[str, int]] = field(default_factory=list)
+    strategic_reading: list[str] = field(default_factory=list)
+    market_opportunity_score: int = 0
+    total_opportunities: int = 0
+    profiles_seen: list[str] = field(default_factory=list)
+
+
+def _domain_from_opp(opp: Opportunity) -> str:
+    return opp.domain or (extract_domain(opp.url) if opp.url else opp.platform)
+
+
+def build_card_unified_stats(
+    card_name: str,
+    opps: list[Opportunity] | None = None,
+) -> CardUnifiedStats:
+    rows = opps if opps is not None else fetch_opportunities_by_card(card_name)
+    stats = CardUnifiedStats(card_name=card_name, total_opportunities=len(rows))
+    if not rows:
+        stats.strategic_reading = ["dados insuficientes"]
+        return stats
+
+    domain_counter: Counter[str] = Counter()
+    profile_set: set[str] = set()
+    score_sum = 0
+
+    for opp in rows:
+        domain = _domain_from_opp(opp)
+        if domain:
+            domain_counter[domain] += 1
+        if opp.profile:
+            profile_set.add(opp.profile)
+
+        score_sum += opp.opportunity_score
+        opp_type = opp.opportunity_type
+
+        if opp_type in BUYER_DEMAND_TYPES:
+            stats.buyer_demand_count += 1
+        if opp_type in SELLER_SUPPLY_TYPES:
+            stats.seller_supply_count += 1
+        if opp_type in MARKET_REFERENCE_TYPES:
+            stats.market_reference_count += 1
+        if opp_type == OpportunityType.URGENT_SALE:
+            stats.urgent_sale_count += 1
+
+    stats.average_opportunity_score = score_sum / len(rows)
+    stats.top_domains = domain_counter.most_common(5)
+    stats.profiles_seen = sorted(profile_set)
+    stats.strategic_reading = compute_strategic_reading(stats)
+    stats.market_opportunity_score = compute_market_opportunity_score(stats)
+    return stats
+
+
+def compute_strategic_reading(stats: CardUnifiedStats) -> list[str]:
+    readings: list[str] = []
+    high = COUNT_THRESHOLD
+
+    if stats.buyer_demand_count >= high and stats.market_reference_count < high:
+        readings.append("possível escassez / demanda maior que oferta")
+    if stats.buyer_demand_count >= high and stats.seller_supply_count >= high:
+        readings.append("mercado ativo / boa liquidez")
+    if stats.seller_supply_count >= high and stats.buyer_demand_count < high:
+        readings.append("muita oferta / cuidado com preço")
+    if stats.market_reference_count >= high:
+        readings.append("boa base para precificação")
+    if stats.urgent_sale_count >= high:
+        readings.append("possível oportunidade de compra")
+
+    if not readings:
+        if stats.total_opportunities == 0:
+            return ["dados insuficientes"]
+        if all(
+            c < high
+            for c in (
+                stats.buyer_demand_count,
+                stats.seller_supply_count,
+                stats.market_reference_count,
+                stats.urgent_sale_count,
+            )
+        ):
+            return ["dados insuficientes"]
+    return readings
+
+
+def compute_market_opportunity_score(stats: CardUnifiedStats) -> int:
+    if stats.total_opportunities == 0:
+        return 0
+
+    score = 0.0
+    score += stats.buyer_demand_count * 15
+    score += stats.urgent_sale_count * 20
+    score += stats.seller_supply_count * 5
+    score += stats.market_reference_count * 8
+    score += min(stats.average_opportunity_score, 100) * 0.3
+    score += len(stats.top_domains) * 5
+
+    domains = {d for d, _ in stats.top_domains}
+    if domains & TCG_SPECIALIZED_DOMAINS:
+        score += 15
+
+    return min(int(score), 100)
+
+
+def build_card_recommendation(stats: CardUnifiedStats) -> str:
+    if stats.total_opportunities == 0:
+        return "Sem dados — rode run-all-profiles para esta carta."
+
+    if stats.urgent_sale_count >= COUNT_THRESHOLD:
+        return "Priorize revisar ofertas urgentes — possível compra abaixo do mercado."
+    if stats.buyer_demand_count >= COUNT_THRESHOLD and stats.market_reference_count < COUNT_THRESHOLD:
+        return "Demanda detectada com pouca referência — monitore escassez e precifique com cautela."
+    if stats.market_reference_count >= COUNT_THRESHOLD:
+        return "Use referências de preço coletadas para calibrar compra/venda."
+    if stats.seller_supply_count >= COUNT_THRESHOLD:
+        return "Há oferta ativa — compare preços antes de comprar."
+    return "Continue coletando dados com os três perfis para decisão mais segura."
+
+
+def _opps_by_profile_and_type(
+    opps: list[Opportunity],
+    profile: str,
+    types: frozenset[OpportunityType],
+) -> list[Opportunity]:
+    return [
+        o for o in opps
+        if o.opportunity_type in types
+        and (o.profile == profile or (not o.profile and profile == ""))
+    ]
+
+
+def _best_links(opps: list[Opportunity], limit: int = 5) -> list[Opportunity]:
+    return sorted(opps, key=lambda o: o.opportunity_score, reverse=True)[:limit]
 
 
 def _action_style(score: int) -> str:
@@ -42,10 +212,6 @@ def _action_style(score: int) -> str:
     if score >= 60:
         return "yellow"
     return "dim"
-
-
-def _domain_from_opp(opp: Opportunity) -> str:
-    return opp.domain or (extract_domain(opp.url) if opp.url else opp.platform)
 
 
 def _review_label(review: str) -> str:
@@ -79,6 +245,7 @@ def display_opportunity_inbox(console: Console, limit: int = 15) -> None:
     table.add_column("Score", justify="right")
     table.add_column("Conf.", justify="right")
     table.add_column("Domínio", max_width=20)
+    table.add_column("Perfil", max_width=14)
     table.add_column("why_saved", max_width=24)
     table.add_column("Revisão", max_width=12)
     table.add_column("Evidência", max_width=24)
@@ -93,6 +260,7 @@ def display_opportunity_inbox(console: Console, limit: int = 15) -> None:
             f"[{style}]{opp.opportunity_score}[/{style}]",
             str(opp.confidence_score),
             _domain_from_opp(opp)[:20],
+            (opp.profile or "—")[:14],
             (opp.why_saved or "—")[:24],
             _review_label(opp.human_review),
             opp.evidence_text[:24],
@@ -333,14 +501,20 @@ def display_rejected_report(console: Console, limit: int = 10) -> None:
 
     console.print(f"[bold]Total rejeitados:[/bold] {total}\n")
 
+    by_profile = count_rejected_by_profile()
+    if by_profile:
+        console.print("[bold]Rejeições por perfil[/bold]")
+        for profile, cnt in by_profile.items():
+            console.print(f"  • {profile or '—'}: {cnt}")
+
     by_category = count_rejected_by_reason_category()
     if by_category:
-        console.print("[bold]Motivos por categoria[/bold]")
+        console.print("\n[bold]Motivos por categoria[/bold]")
         for category, cnt in list(by_category.items())[:10]:
             console.print(f"  • {rejection_label(category)}: {cnt}")
     else:
         by_reason = count_rejected_by_reason()
-        console.print("[bold]Principais motivos[/bold]")
+        console.print("\n[bold]Principais motivos[/bold]")
         for reason, cnt in list(by_reason.items())[:8]:
             label = categorize_rejection_reason(reason)
             console.print(f"  • {label}: {cnt}")
@@ -351,10 +525,37 @@ def display_rejected_report(console: Console, limit: int = 10) -> None:
         for domain, cnt in list(by_domain.items())[:8]:
             console.print(f"  • {domain}: {cnt}")
 
+    market_ref_rejected = fetch_rejected_by_profile("market_reference", limit=limit)
+    marketplace_rows = [
+        r for r in market_ref_rejected
+        if r.url and is_marketplace_domain(r.url)
+    ]
+    if marketplace_rows:
+        console.print(
+            "\n[bold yellow]Marketplaces rejeitados em market_reference[/bold yellow]"
+        )
+        mr_table = Table(show_lines=True)
+        mr_table.add_column("Domínio", max_width=18)
+        mr_table.add_column("Motivo", max_width=28)
+        mr_table.add_column("Título", max_width=24)
+        mr_table.add_column("Ajuste", max_width=28)
+        for row in marketplace_rows[:limit]:
+            domain = extract_domain(row.url)
+            label = categorize_rejection_reason(row.reason, row.reason_category)
+            tip = _rejection_adjustment_tip(row.reason_category, domain)
+            mr_table.add_row(
+                domain[:18],
+                label[:28],
+                row.title[:24],
+                tip[:28],
+            )
+        console.print(mr_table)
+
     examples = fetch_rejected_results(limit=limit)
     if examples:
         console.print("\n[bold]Exemplos de rejeição[/bold]\n")
         table = Table(show_lines=True)
+        table.add_column("Perfil", max_width=14)
         table.add_column("Categoria", max_width=22)
         table.add_column("Motivo", max_width=28)
         table.add_column("Título", max_width=24)
@@ -362,12 +563,27 @@ def display_rejected_report(console: Console, limit: int = 10) -> None:
         for row in examples:
             label = categorize_rejection_reason(row.reason, row.reason_category)
             table.add_row(
+                (row.profile or "—")[:14],
                 label[:22],
                 row.reason[:28],
                 row.title[:24],
                 (row.url or "—")[:22],
             )
         console.print(table)
+
+
+def _rejection_adjustment_tip(reason_category: str, domain: str) -> str:
+    if reason_category == "no_intent":
+        return "Listagem ML/OLX/Shopee pode ser referência sem verbo"
+    if reason_category == "intent_not_allowed":
+        return "Classificar como price_reference no perfil"
+    if reason_category == "no_tcg_context":
+        return "Incluir 'carta pokemon' na query ou snippet"
+    if reason_category == "no_card":
+        return "Verificar se título menciona a carta monitorada"
+    if reason_category == "domain_outside_profile":
+        return f"Adicionar {domain} ao domain_group do perfil"
+    return "Revisar rejected-inbox para falso negativo"
 
 
 def display_review_opportunities(console: Console, limit: int = 50) -> None:
@@ -622,3 +838,143 @@ def display_quality_report(console: Console) -> None:
 
     for tip in recommendations:
         console.print(f"  • {tip}")
+
+
+def display_unified_opportunity_report(console: Console) -> None:
+    """Relatório unificado cruzando os três perfis por carta."""
+    cards = fetch_distinct_opportunity_cards()
+    console.print("[bold blue]🛰️ Unified Opportunity Report — radar híbrido[/bold blue]\n")
+
+    if not cards:
+        console.print(
+            Panel(
+                "Nenhuma oportunidade salva. Rode run-all-profiles primeiro.",
+                border_style="yellow",
+            )
+        )
+        return
+
+    all_stats = [build_card_unified_stats(card) for card in cards]
+    all_stats.sort(key=lambda s: s.market_opportunity_score, reverse=True)
+
+    table = Table(show_lines=True, title="Visão por carta")
+    table.add_column("Carta", style="bold")
+    table.add_column("Demanda", justify="right")
+    table.add_column("Oferta", justify="right")
+    table.add_column("Ref.", justify="right")
+    table.add_column("Urgente", justify="right")
+    table.add_column("Score méd.", justify="right")
+    table.add_column("MOS", justify="right")
+    table.add_column("Top domínios", max_width=22)
+    table.add_column("Leitura", max_width=28)
+
+    for stats in all_stats:
+        domains_label = ", ".join(f"{d}({c})" for d, c in stats.top_domains[:3]) or "—"
+        reading = "; ".join(stats.strategic_reading)[:28]
+        table.add_row(
+            stats.card_name,
+            str(stats.buyer_demand_count),
+            str(stats.seller_supply_count),
+            str(stats.market_reference_count),
+            str(stats.urgent_sale_count),
+            f"{stats.average_opportunity_score:.0f}",
+            str(stats.market_opportunity_score),
+            domains_label[:22],
+            reading,
+        )
+    console.print(table)
+
+    console.print("\n[bold]Leitura estratégica detalhada[/bold]")
+    for stats in all_stats:
+        console.print(f"\n[cyan]{stats.card_name}[/cyan] (MOS={stats.market_opportunity_score})")
+        if stats.profiles_seen:
+            console.print(f"  Perfis: {', '.join(stats.profiles_seen)}")
+        for line in stats.strategic_reading:
+            console.print(f"  • {line}")
+        console.print(f"  Recomendação: {build_card_recommendation(stats)}")
+
+
+def display_card_radar(console: Console, card: str) -> None:
+    """Visão completa de uma carta no radar híbrido."""
+    opps = fetch_opportunities_by_card(card)
+    stats = build_card_unified_stats(card, opps)
+
+    console.print(f"[bold blue]📡 Card Radar — {card}[/bold blue]\n")
+
+    if not opps:
+        console.print(
+            Panel(
+                f"Nenhuma oportunidade para {card}. "
+                "Rode run-all-profiles --cards {card}.",
+                border_style="yellow",
+            )
+        )
+        return
+
+    console.print(Panel(
+        f"[bold]Oportunidades:[/bold] {stats.total_opportunities}\n"
+        f"[bold]Demanda (buyer):[/bold] {stats.buyer_demand_count}\n"
+        f"[bold]Oferta (seller):[/bold] {stats.seller_supply_count}\n"
+        f"[bold]Referência mercado:[/bold] {stats.market_reference_count}\n"
+        f"[bold]Venda urgente:[/bold] {stats.urgent_sale_count}\n"
+        f"[bold]Score médio:[/bold] {stats.average_opportunity_score:.1f}\n"
+        f"[bold]Market Opportunity Score:[/bold] {stats.market_opportunity_score}\n"
+        f"[bold]Perfis:[/bold] {', '.join(stats.profiles_seen) or '—'}",
+        title="Resumo",
+        border_style="blue",
+    ))
+
+    demand_opps = [o for o in opps if o.opportunity_type in BUYER_DEMAND_TYPES]
+    supply_opps = [
+        o for o in opps
+        if o.opportunity_type in SELLER_SUPPLY_TYPES
+        or o.opportunity_type == OpportunityType.URGENT_SALE
+    ]
+    ref_opps = [o for o in opps if o.opportunity_type in MARKET_REFERENCE_TYPES]
+
+    sections = [
+        ("Leads de compra", demand_opps),
+        ("Ofertas / vendedores", supply_opps),
+        ("Referências de preço", ref_opps),
+    ]
+
+    for title, rows in sections:
+        console.print(f"\n[bold]{title}[/bold] ({len(rows)})")
+        if not rows:
+            console.print("  [dim]Nenhum[/dim]")
+            continue
+        section_table = Table(show_lines=True)
+        section_table.add_column("Score", justify="right")
+        section_table.add_column("Tipo")
+        section_table.add_column("Perfil", max_width=14)
+        section_table.add_column("Domínio", max_width=18)
+        section_table.add_column("Evidência", max_width=30)
+        section_table.add_column("URL", max_width=24)
+        for opp in _best_links(rows, limit=5):
+            section_table.add_row(
+                str(opp.opportunity_score),
+                opp.opportunity_type.value,
+                (opp.profile or "—")[:14],
+                _domain_from_opp(opp)[:18],
+                opp.evidence_text[:30],
+                (opp.url or "—")[:24],
+            )
+        console.print(section_table)
+
+    if stats.top_domains:
+        console.print("\n[bold]Domínios[/bold]")
+        for domain, cnt in stats.top_domains:
+            console.print(f"  • {domain}: {cnt}")
+
+    console.print("\n[bold]Melhores links[/bold]")
+    for opp in _best_links(opps, limit=5):
+        console.print(
+            f"  • [{opp.opportunity_score}] {_domain_from_opp(opp)} — "
+            f"{opp.opportunity_type.value} — {(opp.url or '—')[:60]}"
+        )
+
+    console.print("\n[bold]Leitura estratégica[/bold]")
+    for line in stats.strategic_reading:
+        console.print(f"  • {line}")
+
+    console.print(f"\n[bold]Recomendação:[/bold] {build_card_recommendation(stats)}")

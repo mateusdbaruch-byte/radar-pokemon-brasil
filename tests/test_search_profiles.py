@@ -81,6 +81,25 @@ class TestProfileFiltering:
             "no_intent",
         )
 
+    def test_market_reference_accepts_olx_without_vendo(self):
+        profile = get_search_profile("market_reference")
+        cfg = profile.to_quality_config()
+        opp = self._opp(
+            "Charizard Pokémon TCG carta",
+            "Charizard",
+            "https://www.olx.com.br/anuncio/charizard",
+        )
+        result = evaluate_hit(
+            "Charizard carta pokemon",
+            "Charizard holo Pokémon TCG",
+            "https://www.olx.com.br/anuncio/charizard",
+            "Charizard",
+            opp,
+            cfg,
+        )
+        assert result.accepted is True
+        assert result.refined_type == OpportunityType.PRICE_REFERENCE
+
     def test_market_reference_accepts_liga(self):
         profile = get_search_profile("market_reference")
         cfg = profile.to_quality_config()
