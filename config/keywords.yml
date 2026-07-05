@@ -1,0 +1,48 @@
+# Palavras-chave para classificação de intenção
+buy_intent_pt:
+  - procuro
+  - compro
+  - comprando
+  - alguém vende
+  - alguém tem
+  - onde acho
+  - buscando
+  - preciso
+  - quero comprar
+  - pago
+  - pagando
+  - aceito propostas
+
+sell_intent_pt:
+  - vendo
+  - à venda
+  - a venda
+  - disponível
+  - disponivel
+  - tenho
+  - faço
+  - faco
+  - anuncio
+  - anúncio
+  - lote
+  - desapego
+
+buy_intent_en:
+  - wtb
+  - looking for
+  - buying
+  - need
+  - searching for
+  - anyone selling
+  - paying
+  - iso
+
+price_reference:
+  - preço
+  - preco
+  - valor
+  - r$
+  - reais
+  - price
+  - sold for
+  - vendido por
