@@ -51,6 +51,7 @@ class HealthStatus(str, Enum):
     BLOCKED = "BLOCKED"
     PENDING_APPROVAL = "PENDING_APPROVAL"
     REQUIRES_AUTH = "REQUIRES_AUTH"
+    PENDING_ACCESS = "PENDING_ACCESS"
 
 
 class ConnectorDataMode(str, Enum):

@@ -223,3 +223,8 @@ def reset_all_data(
     pd.DataFrame(columns=list(template.to_db_row().keys())).to_csv(
         csv, index=False, encoding="utf-8-sig"
     )
+    try:
+        from src.opportunity_db import clear_opportunity_data
+        clear_opportunity_data(path)
+    except ImportError:
+        pass

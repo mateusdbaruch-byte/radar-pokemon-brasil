@@ -1,0 +1,165 @@
+"""Modelos do Opportunity Radar."""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+from src.models import DataMode
+
+
+class OpportunityType(str, Enum):
+    BUYER_INTENT = "buyer_intent"
+    SELLER_INTENT = "seller_intent"
+    WISHLIST_LEAD = "wishlist_lead"
+    MARKETPLACE_LISTING = "marketplace_listing"
+    WEB_SIGNAL = "web_signal"
+    DISCUSSION = "discussion"
+
+
+class OpportunityStatus(str, Enum):
+    NEW = "new"
+    REVIEWED = "reviewed"
+    DISMISSED = "dismissed"
+
+
+class Opportunity(BaseModel):
+    """Oportunidade detectada pelo radar."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    opportunity_type: OpportunityType = OpportunityType.WEB_SIGNAL
+    source: str
+    platform: str
+    card_name_detected: str
+    normalized_card_name: str
+    evidence_text: str = ""
+    url: str = ""
+    author_or_seller: str = ""
+    price: Optional[float] = None
+    currency: str = "BRL"
+    intent_score: int = 0
+    urgency_score: int = 0
+    opportunity_score: int = 0
+    confidence_score: int = 0
+    data_mode: DataMode = DataMode.LIVE
+    status: OpportunityStatus = OpportunityStatus.NEW
+    collected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    raw_data_json: str = "{}"
+    recommended_action: str = ""
+
+    def to_db_row(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "opportunity_type": self.opportunity_type.value,
+            "source": self.source,
+            "platform": self.platform,
+            "card_name_detected": self.card_name_detected,
+            "normalized_card_name": self.normalized_card_name,
+            "evidence_text": self.evidence_text,
+            "url": self.url,
+            "author_or_seller": self.author_or_seller,
+            "price": self.price,
+            "currency": self.currency,
+            "intent_score": self.intent_score,
+            "urgency_score": self.urgency_score,
+            "opportunity_score": self.opportunity_score,
+            "confidence_score": self.confidence_score,
+            "data_mode": self.data_mode.value,
+            "status": self.status.value,
+            "collected_at": self.collected_at.isoformat(),
+            "raw_data_json": self.raw_data_json,
+            "recommended_action": self.recommended_action,
+        }
+
+    @classmethod
+    def from_db_row(cls, row: dict[str, Any]) -> Opportunity:
+        collected = row.get("collected_at")
+        return cls(
+            id=row["id"],
+            opportunity_type=OpportunityType(row.get("opportunity_type", "web_signal")),
+            source=row["source"],
+            platform=row["platform"],
+            card_name_detected=row["card_name_detected"],
+            normalized_card_name=row["normalized_card_name"],
+            evidence_text=row.get("evidence_text") or "",
+            url=row.get("url") or "",
+            author_or_seller=row.get("author_or_seller") or "",
+            price=row.get("price"),
+            currency=row.get("currency") or "BRL",
+            intent_score=int(row.get("intent_score") or 0),
+            urgency_score=int(row.get("urgency_score") or 0),
+            opportunity_score=int(row.get("opportunity_score") or 0),
+            confidence_score=int(row.get("confidence_score") or 0),
+            data_mode=DataMode(row.get("data_mode") or DataMode.LIVE.value),
+            status=OpportunityStatus(row.get("status") or OpportunityStatus.NEW.value),
+            collected_at=(
+                datetime.fromisoformat(collected)
+                if collected
+                else datetime.now(timezone.utc)
+            ),
+            raw_data_json=row.get("raw_data_json") or "{}",
+            recommended_action=row.get("recommended_action") or "",
+        )
+
+    def set_raw_data(self, data: Any) -> None:
+        self.raw_data_json = json.dumps(data, ensure_ascii=False, default=str)
+
+
+class WishlistLead(BaseModel):
+    """Lead opt-in da lista de desejos."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    contact: str = ""
+    card_name: str
+    collection: str = ""
+    language: str = "pt-BR"
+    condition: str = ""
+    max_price: Optional[float] = None
+    urgency: str = "media"
+    notes: str = ""
+    source: str = "manual"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_db_row(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "contact": self.contact,
+            "card_name": self.card_name,
+            "collection": self.collection,
+            "language": self.language,
+            "condition": self.condition,
+            "max_price": self.max_price,
+            "urgency": self.urgency,
+            "notes": self.notes,
+            "source": self.source,
+            "created_at": self.created_at.isoformat(),
+        }
+
+    @classmethod
+    def from_db_row(cls, row: dict[str, Any]) -> WishlistLead:
+        created = row.get("created_at")
+        return cls(
+            id=row["id"],
+            name=row["name"],
+            contact=row.get("contact") or "",
+            card_name=row["card_name"],
+            collection=row.get("collection") or "",
+            language=row.get("language") or "pt-BR",
+            condition=row.get("condition") or "",
+            max_price=row.get("max_price"),
+            urgency=row.get("urgency") or "media",
+            notes=row.get("notes") or "",
+            source=row.get("source") or "manual",
+            created_at=(
+                datetime.fromisoformat(created)
+                if created
+                else datetime.now(timezone.utc)
+            ),
+        )

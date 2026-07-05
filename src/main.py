@@ -34,7 +34,20 @@ from src.health_adapters import mercado_livre_to_health, reddit_to_health
 from src.manual_import import import_prices_from_csv, validate_import_file
 from src.market_snapshot import display_market_snapshot
 from src.models import DataMode, RadarResult, tag_results
-from src.paths import DEFAULT_CARDS, DEFAULT_CSV, DEFAULT_DB, DEFAULT_SOURCES, PROJECT_ROOT
+from src.paths import (
+    DEFAULT_CARDS,
+    DEFAULT_CSV,
+    DEFAULT_DB,
+    DEFAULT_SOURCES,
+    DEFAULT_WATCHLIST,
+    PROJECT_ROOT,
+)
+from src.opportunity_db import save_opportunities
+from src.opportunity_models import WishlistLead
+from src.opportunity_reporting import display_opportunity_inbox, display_opportunity_report
+from src.opportunity_scanner import scan_opportunities
+from src.opportunity_db import save_wishlist_lead
+from src.wishlist import import_wishlist_csv, validate_wishlist_csv
 from src.reddit_auth import REDDIT_ENV_FIELDS, RedditAuthStatus, inspect_reddit_env
 from src.reddit_policy import (
     REDDIT_PENDING_MESSAGE,
@@ -267,6 +280,134 @@ def reddit_policy_status() -> None:
         "\n[dim]Reddit é fonte opcional. Use import-prices (Liga/MYP) e Mercado Livre "
         "para validar o MVP sem Reddit.[/dim]"
     )
+
+
+def load_watchlist(path: Path) -> list[str]:
+    return load_yaml(path).get("cards", [])
+
+
+@app.command("scan-opportunities")
+def scan_opportunities_cmd(
+    cards: Path = typer.Option(DEFAULT_WATCHLIST, "--cards", "-c"),
+    sources: str = typer.Option(
+        "web_search,wishlist",
+        "--sources",
+        help="Fontes: web_search,wishlist,mercado_livre,...",
+    ),
+    limit: int = typer.Option(20, "--limit", "-l"),
+) -> None:
+    """Escaneia oportunidades automatizadas nas fontes disponíveis."""
+    card_list = load_watchlist(cards)
+    if not card_list:
+        console.print(f"[red]Nenhuma carta em {cards}[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[bold blue]🎯 Opportunity Radar — scan[/bold blue]\n"
+        f"[dim]Cartas: {len(card_list)} | Fontes: {sources}[/dim]\n"
+    )
+
+    result = scan_opportunities(card_list, sources, limit=limit)
+
+    for msg in result.messages:
+        console.print(f"[dim]  • {msg}[/dim]")
+    if result.skipped_sources:
+        console.print(
+            f"[yellow]Fontes puladas (PENDING_ACCESS/gated): "
+            f"{', '.join(result.skipped_sources)}[/yellow]"
+        )
+
+    if not result.opportunities:
+        console.print(
+            Panel(
+                "[yellow]Nenhuma oportunidade coletada.[/yellow]\n\n"
+                "  • Configure WEB_SEARCH_PROVIDER no .env\n"
+                "  • import-wishlist para leads opt-in\n"
+                "  • doctor para diagnóstico",
+                border_style="yellow",
+                title="Scan vazio",
+            )
+        )
+        raise typer.Exit(1)
+
+    saved = save_opportunities(result.opportunities)
+    console.print(f"\n[green]✓ {saved} oportunidades salvas[/green]")
+    console.print(f"[dim]Fontes live nesta execução: {', '.join(result.live_sources) or '—'}[/dim]\n")
+
+    table = Table(title="Top oportunidades", show_lines=True)
+    table.add_column("Carta", style="bold")
+    table.add_column("Score", justify="right")
+    table.add_column("Tipo")
+    table.add_column("Fonte")
+    table.add_column("Evidência", max_width=40)
+    for opp in result.opportunities[:10]:
+        table.add_row(
+            opp.normalized_card_name,
+            str(opp.opportunity_score),
+            opp.opportunity_type.value,
+            opp.source,
+            opp.evidence_text[:40],
+        )
+    console.print(table)
+
+
+@app.command("opportunity-inbox")
+def opportunity_inbox(
+    limit: int = typer.Option(15, "--limit", "-n"),
+) -> None:
+    """Caixa de entrada de oportunidades."""
+    display_opportunity_inbox(console, limit=limit)
+
+
+@app.command("opportunity-report")
+def opportunity_report_cmd() -> None:
+    """Relatório consolidado de oportunidades."""
+    display_opportunity_report(console)
+
+
+@app.command("add-wishlist-lead")
+def add_wishlist_lead(
+    name: str = typer.Option(..., "--name", "-n", prompt="Nome"),
+    card_name: str = typer.Option(..., "--card", "-c", prompt="Carta"),
+    contact: str = typer.Option("", "--contact"),
+    collection: str = typer.Option("", "--collection"),
+    language: str = typer.Option("pt-BR", "--language"),
+    condition: str = typer.Option("", "--condition"),
+    max_price: float = typer.Option(0.0, "--max-price"),
+    urgency: str = typer.Option("media", "--urgency"),
+    notes: str = typer.Option("", "--notes"),
+    source: str = typer.Option("cli", "--source"),
+) -> None:
+    """Cadastra lead opt-in na lista de desejos."""
+    lead = WishlistLead(
+        name=name,
+        contact=contact,
+        card_name=card_name,
+        collection=collection,
+        language=language,
+        condition=condition,
+        max_price=max_price if max_price > 0 else None,
+        urgency=urgency,
+        notes=notes,
+        source=source,
+    )
+    save_wishlist_lead(lead)
+    console.print(f"[green]✓ Lead salvo: {name} → {card_name}[/green]")
+
+
+@app.command("import-wishlist")
+def import_wishlist(
+    file: Path = typer.Argument(..., help="CSV de wishlist opt-in"),
+) -> None:
+    """Importa leads da lista de desejos (opt-in)."""
+    ok, errors = validate_wishlist_csv(file)
+    if not ok:
+        console.print("[red]CSV inválido:[/red]")
+        for e in errors:
+            console.print(f"  • {e}")
+        raise typer.Exit(1)
+    leads = import_wishlist_csv(file)
+    console.print(f"[green]✓ {len(leads)} lead(s) importados[/green]")
 
 
 @app.command("setup-env")
@@ -556,7 +697,7 @@ def reset_db(force: bool = typer.Option(False, "--force", "-y")) -> None:
         if not typer.confirm("Continuar?"):
             raise typer.Exit(0)
     reset_all_data(DEFAULT_DB, DEFAULT_CSV)
-    console.print("[green]✓ Banco e CSV resetados.[/green]")
+    console.print("[green]✓ Banco, oportunidades, wishlist e CSV resetados.[/green]")
 
 
 @app.command()
@@ -590,6 +731,7 @@ def source_status() -> None:
             "ERROR": "red",
             "BLOCKED": "red",
             "PENDING_APPROVAL": "yellow",
+            "PENDING_ACCESS": "yellow",
             "REQUIRES_AUTH": "yellow",
         }.get(st, "white")
         table.add_row(

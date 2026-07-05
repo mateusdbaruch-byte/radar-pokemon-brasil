@@ -11,6 +11,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 
 DEFAULT_CARDS = CONFIG_DIR / "cards.yml"
+DEFAULT_WATCHLIST = CONFIG_DIR / "watchlist.yml"
 DEFAULT_KEYWORDS = CONFIG_DIR / "keywords.yml"
 DEFAULT_SOURCES = CONFIG_DIR / "sources.yml"
 DEFAULT_DB = DATA_DIR / "radar.db"

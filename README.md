@@ -1,20 +1,46 @@
 # Radar Pokémon Brasil 🇧🇷
 
-Ferramenta de **inteligência de mercado** para cartas Pokémon TCG no Brasil.  
-Coleta sinais públicos de compra e venda, calcula preços e gera recomendações simples por carta.
+**Opportunity Radar** automatizado para cartas Pokémon TCG no Brasil.  
+Detecta compradores potenciais, sinais públicos na web e leads opt-in — dentro dos limites permitidos.
+
+---
+
+## Fluxo principal (Opportunity Radar)
+
+```bash
+# 1. Diagnóstico do ambiente
+python3 -m src.main doctor
+
+# 2. Reset e preparar wishlist opt-in
+python3 -m src.main reset-db --force
+python3 -m src.main import-wishlist data/imports/wishlist_example.csv
+
+# 3. Configurar busca web no .env (opcional mas recomendado)
+python3 -m src.main setup-env
+# WEB_SEARCH_PROVIDER=bing + BING_SEARCH_API_KEY
+
+# 4. Escanear oportunidades
+python3 -m src.main scan-opportunities --cards config/watchlist.yml --sources web_search,wishlist --limit 20
+
+# 5. Ver resultados
+python3 -m src.main opportunity-inbox
+python3 -m src.main opportunity-report
+```
+
+Documentação completa: [`docs/AUTOMATED_OPPORTUNITY_RADAR.md`](docs/AUTOMATED_OPPORTUNITY_RADAR.md)
 
 ---
 
 ## O que este projeto faz?
 
-1. Monitora cartas Pokémon (Charizard, Umbreon, Pikachu…)
-2. Busca menções em fontes públicas (Reddit, Mercado Livre…)
-3. Classifica intenção de compra ou venda
-4. Calcula **preço mínimo, máximo e médio** por carta
-5. Gera recomendação: *boa demanda*, *muita oferta*, *possível oportunidade*, etc.
-6. Salva em SQLite e CSV
+1. **Busca web automatizada** — APIs oficiais (Bing, Google, SerpAPI) com queries de intenção de compra/venda
+2. **Lista de desejos opt-in** — leads autorizados que procuram cartas específicas
+3. **Marketplaces autorizados** — Mercado Livre API; OLX/Shopee/Liga/MYP como PENDING_ACCESS
+4. **Classificação** — intent_score, opportunity_score, ação recomendada
+5. **Placeholders** — bots Discord/Telegram e Meta para crescimento futuro
 
-> Este MVP **não** envia mensagens nem acessa grupos privados. Apenas coleta dados públicos.
+> Não faz scraping irregular, não usa proxy, não automatiza login.  
+> Facebook, Instagram de terceiros e WhatsApp **não** são rastreados.
 
 ---
 
@@ -315,8 +341,13 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 
 | Comando | O que faz |
 |---------|-----------|
-| `python3 -m src.main setup-env` | Cria `.env` a partir do exemplo |
-| `python3 -m src.main reddit-policy-status` | Status de política/aprovação Reddit |
+| `python3 -m src.main scan-opportunities` | **Fluxo principal** — escaneia oportunidades |
+| `python3 -m src.main opportunity-inbox` | Caixa de entrada de oportunidades |
+| `python3 -m src.main opportunity-report` | Relatório consolidado |
+| `python3 -m src.main add-wishlist-lead` | Cadastra lead opt-in |
+| `python3 -m src.main import-wishlist` | Importa CSV de wishlist |
+| `python3 -m src.main setup-env` | Cria `.env` |
+| `python3 -m src.main doctor` | Diagnóstico do ambiente |
 | `python3 -m src.main search-reddit` | Busca apenas Reddit (live) |
 | `python3 -m src.main validate-import` | Valida CSV de preços manuais |
 | `python3 -m src.main import-prices` | Importa LigaPokemon/MYP (manual_import) |
