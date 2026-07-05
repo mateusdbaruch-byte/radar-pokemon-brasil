@@ -48,6 +48,9 @@ class HealthStatus(str, Enum):
     OK = "OK"
     WARNING = "WARNING"
     ERROR = "ERROR"
+    BLOCKED = "BLOCKED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    REQUIRES_AUTH = "REQUIRES_AUTH"
 
 
 class ConnectorDataMode(str, Enum):
@@ -57,6 +60,7 @@ class ConnectorDataMode(str, Enum):
     AUTH_FAILED = "auth_failed"
     MISSING_CREDENTIALS = "missing_credentials"
     BLOCKED = "blocked"
+    PENDING_APPROVAL = "pending_approval"
 
 
 @dataclass
@@ -164,6 +168,17 @@ def save_search_run_log(
     )
     conn.commit()
     conn.close()
+
+
+def fetch_latest_for_source(
+    source: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, Any] | None:
+    """Último registro de saúde de uma fonte específica."""
+    for row in fetch_latest_by_source(db_path):
+        if row.get("source") == source:
+            return row
+    return None
 
 
 def fetch_latest_search_log(db_path: Path | str = DEFAULT_DB) -> dict[str, Any] | None:

@@ -55,39 +55,9 @@ No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.
 
 ## Primeira validação real (recomendado)
 
-### 1. Configurar ambiente
+O MVP **não depende do Reddit**. Fluxo recomendado:
 
-```bash
-python3 -m src.main setup-env
-```
-
-Copia `.env.example` → `.env` e lista variáveis a preencher **manualmente** (sem pedir senha no terminal).
-
-Edite `.env` com credenciais Reddit OAuth ([reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)):
-
-```env
-REDDIT_CLIENT_ID=seu_id
-REDDIT_CLIENT_SECRET=seu_secret
-REDDIT_USER_AGENT=python:radar-pokemon-brasil:v0.1.0 (by /u/SEU_USUARIO)
-```
-
-### 2. Testar Reddit OAuth
-
-```bash
-python3 -m src.main test-reddit-auth
-```
-
-Mostra quais campos estão preenchidos (sem revelar valores), tenta autenticar e faz busca de teste.
-
-### 3. Buscar Reddit real
-
-```bash
-python3 -m src.main reset-db --force
-python3 -m src.main search-reddit --query "pokemon tcg brasil" --limit 10
-python3 -m src.main report
-```
-
-### 4. Importar preços manuais (LigaPokemon / MYP Cards)
+### 1. Preços reais via importação manual (LigaPokemon / MYP)
 
 ```bash
 python3 -m src.main validate-import data/imports/manual_prices_example.csv
@@ -95,16 +65,35 @@ python3 -m src.main import-prices data/imports/manual_prices_example.csv
 python3 -m src.main market-snapshot
 ```
 
-O `market-snapshot` usa **live + manual_import** — nunca mock.
-
-### 5. Busca por fonte específica
+### 2. Mercado Livre (quando disponível)
 
 ```bash
-python3 -m src.main search --sources reddit --cards config/cards.yml --limit 20 --live-only
-python3 -m src.main search --sources mercado_livre,reddit --live-only
+python3 -m src.main test-mercadolivre
+python3 -m src.main search --sources mercado_livre --live-only --limit 20
+python3 -m src.main report
 ```
 
-Se Mercado Livre retornar 403, o Reddit pode continuar sozinho.
+### 3. Reddit — fonte opcional (após aprovação da API)
+
+```bash
+python3 -m src.main setup-env
+python3 -m src.main reddit-policy-status
+python3 -m src.main test-reddit-auth
+```
+
+Se `PENDING_APPROVAL`, o Reddit fica desabilitado até credenciais **e** aprovação oficial. Use `import-prices` enquanto isso.
+
+```bash
+python3 -m src.main search-reddit --query "pokemon tcg brasil" --limit 10
+```
+
+### 4. Diagnóstico geral
+
+```bash
+python3 -m src.main doctor
+```
+
+O `doctor` só falha criticamente se banco, CSV ou configs estiverem quebrados. Reddit em `PENDING_APPROVAL` é aviso, não erro do sistema.
 
 ---
 
@@ -327,7 +316,7 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | Comando | O que faz |
 |---------|-----------|
 | `python3 -m src.main setup-env` | Cria `.env` a partir do exemplo |
-| `python3 -m src.main test-reddit-auth` | Testa OAuth Reddit (sem salvar dados) |
+| `python3 -m src.main reddit-policy-status` | Status de política/aprovação Reddit |
 | `python3 -m src.main search-reddit` | Busca apenas Reddit (live) |
 | `python3 -m src.main validate-import` | Valida CSV de preços manuais |
 | `python3 -m src.main import-prices` | Importa LigaPokemon/MYP (manual_import) |
@@ -413,7 +402,7 @@ radar-pokemon-brasil/
 
 | Fonte | Status | Precisa de chave? |
 |-------|--------|-------------------|
-| Reddit | ✅ Ativo | OAuth via `.env` (setup-env) |
+| Reddit | ⏳ Opcional | Requer aprovação API — `reddit-policy-status` |
 | Mercado Livre | ⚙️ Diagnóstico | API pública; 403 comum — não trava MVP |
 | LigaPokemon / MYP | ✅ Import manual | `import-prices` (manual_import) |
 | YouTube | ⚙️ Opcional | Sim (`YOUTUBE_API_KEY`) |

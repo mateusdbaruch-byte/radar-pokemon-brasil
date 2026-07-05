@@ -1,6 +1,6 @@
 # Validação de dados reais — Radar Pokémon Brasil
 
-Este guia explica como validar o MVP com dados **reais** (`live` ou `manual_import`), distinguir de **mock** e lidar com bloqueios de API.
+Este guia explica como validar o MVP com dados **reais** (`live` ou `manual_import`), distinguir de **mock** e lidar com fontes bloqueadas ou gated.
 
 ---
 
@@ -10,50 +10,21 @@ O MVP só é considerado **validado para decisão de mercado** quando houver dad
 
 | `data_mode` | Validação |
 |-------------|-----------|
-| `live` | Coletado de API real (Reddit OAuth, etc.) |
+| `live` | Coletado de API real (Mercado Livre, Reddit aprovado…) |
 | `manual_import` | Importado de CSV confiável (LigaPokemon, MYP Cards) |
 | `mock` | **Não valida** — serve apenas para testar interface e relatório |
 
 **Regra:** `mock = 0` e (`live > 0` ou `manual_import > 0`).
 
+**Reddit não bloqueia a validação do MVP.** Use importação manual e Mercado Livre enquanto o Reddit estiver em aprovação.
+
 O comando `market-snapshot` mostra apenas `live` + `manual_import` — nunca mock.
 
 ---
 
-## Fluxo de primeira validação
+## Fluxo recomendado do MVP
 
-### 1. Configurar `.env`
-
-```bash
-python3 -m src.main setup-env
-```
-
-- Cria `.env` a partir de `.env.example` se não existir
-- Lista variáveis a preencher manualmente
-- **Não pede senha no terminal** — edite o arquivo no editor
-
-### 2. Testar Reddit OAuth
-
-```bash
-python3 -m src.main test-reddit-auth
-```
-
-- Mostra quais campos estão preenchidos (valores ocultos)
-- Tenta autenticar via OAuth (`client_credentials` ou `password` grant)
-- Faz busca de teste por `"pokemon tcg brasil"`
-- **Não salva em `radar_results`**
-
-### 3. Coletar dados live do Reddit
-
-```bash
-python3 -m src.main reset-db --force
-python3 -m src.main search-reddit --query "pokemon tcg brasil" --limit 10
-python3 -m src.main report
-```
-
-### 4. Importar preços manuais
-
-Alternativa quando APIs estão bloqueadas:
+### 1. Preços reais — importação manual (prioridade)
 
 ```bash
 python3 -m src.main validate-import data/imports/manual_prices_example.csv
@@ -61,25 +32,85 @@ python3 -m src.main import-prices data/imports/manual_prices_example.csv
 python3 -m src.main market-snapshot
 ```
 
-Colunas do CSV: `source`, `card_name`, `price`, `currency`, `condition`, `language`, `url`, `seller`, `collected_at`
-
-Fontes aceitas: `liga_pokemon`, `myp_cards`, `manual`, `mercado_livre`
-
-### 5. Diagnóstico geral
+### 2. Mercado Livre (quando disponível)
 
 ```bash
-python3 -m src.main doctor
-python3 -m src.main source-status
+python3 -m src.main test-mercadolivre
+python3 -m src.main search --sources mercado_livre --live-only --limit 20
+```
+
+HTTP 403 no ML é comum em datacenter — modo diagnóstico, não trava o MVP.
+
+### 3. Reddit — fonte opcional após aprovação
+
+```bash
+python3 -m src.main setup-env
+python3 -m src.main reddit-policy-status
+python3 -m src.main test-reddit-auth
 ```
 
 ---
 
-## Reddit — OAuth e User-Agent
+## Reddit — fonte gated / pending approval
 
-O Reddit exige identificação clara. Para OAuth:
+O Reddit exige leitura da **Responsible Builder Policy** e pode exigir **aprovação explícita** para uso da API.
 
-1. Crie app em [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)
-2. Preencha no `.env`:
+**Não fazemos:**
+- Scraping de HTML
+- Bypass de captcha, login ou bloqueios
+- Contorno de políticas ou rate limits
+
+**Quando a API retorna 403 ou mensagem de política/aprovação:**
+
+| Comportamento | Detalhe |
+|---------------|---------|
+| Status | `PENDING_APPROVAL` em `connector_health` |
+| Busca | Fonte pulada — execução continua com outras fontes |
+| Mock | Nunca usado automaticamente |
+| Mensagem | *Reddit API requires approval/configuration. This source is disabled until credentials and approval are available.* |
+
+```bash
+python3 -m src.main reddit-policy-status
+```
+
+**Para uso comercial ou escala:** solicite aprovação oficial no [Reddit Developer Portal](https://www.reddit.com/prefs/apps) e cumpra a Responsible Builder Policy.
+
+### Status possíveis em `connector_health`
+
+| Status | Significado |
+|--------|-------------|
+| `OK` | Fonte operacional |
+| `WARNING` | Aviso não crítico |
+| `ERROR` | Falha técnica |
+| `BLOCKED` | Bloqueio de IP/rede (ex.: Mercado Livre 403) |
+| `PENDING_APPROVAL` | Reddit aguardando aprovação/configuração |
+| `REQUIRES_AUTH` | Credenciais OAuth/User-Agent ausentes |
+
+---
+
+## Doctor — o que é erro crítico?
+
+O `doctor` **só indica falha crítica do ambiente** quando:
+
+- SQLite inacessível
+- Escrita CSV falha
+- Arquivos `config/*.yml` inválidos ou ausentes
+
+Reddit em `PENDING_APPROVAL` ou Mercado Livre em `BLOCKED` são **avisos de fonte**, não falha do sistema.
+
+```bash
+python3 -m src.main doctor
+```
+
+---
+
+## Configurar Reddit (quando aprovado)
+
+```bash
+python3 -m src.main setup-env
+```
+
+Edite `.env` manualmente:
 
 ```env
 REDDIT_CLIENT_ID=seu_client_id
@@ -87,52 +118,24 @@ REDDIT_CLIENT_SECRET=seu_client_secret
 REDDIT_USER_AGENT=python:radar-pokemon-brasil:v0.1.0 (by /u/SEU_USUARIO)
 ```
 
-3. **Opcional** — grant password (app tipo *script*):
-
-```env
-REDDIT_USERNAME=seu_usuario
-REDDIT_PASSWORD=sua_senha
-```
-
-Se `REDDIT_USERNAME` e `REDDIT_PASSWORD` estiverem vazios, o conector usa `client_credentials` (read-only).
-
-**Status salvos em `connector_health`:**
-
-| Status | Significado |
-|--------|-------------|
-| `live` | OAuth OK e/ou busca funcionando |
-| `auth_failed` | Credenciais rejeitadas |
-| `missing_credentials` | `.env` incompleto |
-| `blocked` | HTTP 403 — IP/rede bloqueado |
-
----
-
-## Mercado Livre — modo diagnóstico
-
-A API pública do Mercado Livre pode retornar **HTTP 403** em IPs de datacenter. Isso **não trava o MVP**:
-
-- `test-mercadolivre` e `doctor` continuam diagnosticando
-- Respostas `forbidden` **não são salvas** como dados reais
-- Use Reddit OAuth ou `import-prices` como fontes alternativas
-- Teste ML em rede residencial ou com `MERCADOLIVRE_ACCESS_TOKEN` se tiver app oficial
+Teste:
 
 ```bash
-python3 -m src.main test-mercadolivre --query "carta pokemon charizard"
+python3 -m src.main test-reddit-auth
+python3 -m src.main search-reddit --query "pokemon tcg brasil" --limit 10
 ```
 
 ---
 
-## Busca por fonte específica
+## Busca por fonte
 
 ```bash
-# Apenas Reddit (live)
-python3 -m src.main search --sources reddit --live-only --limit 20
+# Só Mercado Livre — Reddit pending não derruba a execução
+python3 -m src.main search --sources mercado_livre --live-only
 
-# Reddit + Mercado Livre (ML pode falhar sem derrubar Reddit)
-python3 -m src.main search --sources mercado_livre,reddit --live-only
+# Reddit só se aprovado
+python3 -m src.main search --sources reddit --live-only
 ```
-
-Se uma fonte falhar, as outras continuam.
 
 ---
 
@@ -142,39 +145,26 @@ Se uma fonte falhar, as outras continuam.
 python3 -m src.main search --mock-only --limit 5
 ```
 
-Use **somente** para:
-- Testar relatório e interface offline
-- Demonstrações sem API
-
-O relatório exibe aviso vermelho quando há mock:
-
-> ATENÇÃO: este relatório contém dados simulados. Não use para decisão real de mercado.
+Não use mock para validar mercado.
 
 ---
 
-## O que fica fora do MVP
-
-Sem opt-in ou autorização explícita, **não coletamos**:
+## Fora do MVP (sem opt-in)
 
 | Plataforma | Motivo |
 |------------|--------|
-| Facebook / Instagram | ToS proíbem scraping; APIs restritas |
-| WhatsApp | Mensagens privadas |
-| Discord / Telegram privado | Grupos fechados |
-| Login automatizado irregular | Não burlamos captcha ou bloqueios |
-
-Apenas APIs públicas oficiais e importação manual autorizada pelo usuário.
+| Facebook / Instagram | Scraping proibido; APIs restritas |
+| WhatsApp | Privado |
+| Discord / grupos privados | Sem autorização |
+| Bypass de políticas | Não implementado |
 
 ---
 
 ## Resumo de comandos
 
 ```bash
-python3 -m src.main setup-env
-python3 -m src.main test-reddit-auth
-python3 -m src.main search-reddit --query "pokemon tcg brasil" --limit 10
-python3 -m src.main validate-import data/imports/manual_prices_example.csv
 python3 -m src.main import-prices data/imports/manual_prices_example.csv
 python3 -m src.main market-snapshot
+python3 -m src.main reddit-policy-status
 python3 -m src.main doctor
 ```

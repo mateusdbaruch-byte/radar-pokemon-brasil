@@ -45,7 +45,7 @@ def _reddit_diag(**kwargs) -> RedditDiagnosticResult:
 class TestHealthAdapters:
     def test_ml_forbidden(self):
         health = mercado_livre_to_health(_ml_diag(status_code=403, is_forbidden=True))
-        assert health.status == HealthStatus.ERROR
+        assert health.status == HealthStatus.BLOCKED
         assert health.data_mode == ConnectorDataMode.UNAVAILABLE
 
     def test_ml_ok(self):
@@ -57,9 +57,9 @@ class TestHealthAdapters:
         health = reddit_to_health(_reddit_diag(auth_mode="oauth"))
         assert "oauth" in health.message
 
-    def test_reddit_forbidden(self):
+    def test_reddit_forbidden_pending(self):
         health = reddit_to_health(
-            _reddit_diag(status_code=403, is_valid_json=False, auth_status="blocked")
+            _reddit_diag(status_code=403, is_valid_json=False, auth_status="pending_approval")
         )
+        assert health.status == HealthStatus.PENDING_APPROVAL
         assert health.http_status == 403
-        assert health.data_mode == ConnectorDataMode.BLOCKED

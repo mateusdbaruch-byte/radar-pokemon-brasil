@@ -59,11 +59,11 @@ def _check_mercado_livre() -> HealthCheckResult:
     if diag.status_code == 403:
         return HealthCheckResult(
             source="mercado_livre",
-            status=HealthStatus.ERROR,
+            status=HealthStatus.BLOCKED,
             data_mode=ConnectorDataMode.UNAVAILABLE,
             http_status=403,
-            message="HTTP 403 forbidden — bloqueio da API (não é dado real)",
-            next_action="Teste em rede residencial; não use resultados deste IP",
+            message="HTTP 403 — API em diagnóstico (não é dado real)",
+            next_action="Use import-prices; teste em rede residencial",
             raw_response_snippet=snippet,
         )
 
@@ -90,41 +90,10 @@ def _check_mercado_livre() -> HealthCheckResult:
 
 
 def _check_reddit() -> HealthCheckResult:
+    from src.health_adapters import reddit_to_health
+
     diag = diagnose_reddit("pokemon tcg brasil charizard")
-    snippet = diag.response_preview[:500]
-    auth_note = f" [{diag.auth_mode}]" if hasattr(diag, "auth_mode") else ""
-
-    if diag.status_code == 200 and diag.is_valid_json:
-        return HealthCheckResult(
-            source="reddit",
-            status=HealthStatus.OK,
-            data_mode=ConnectorDataMode.LIVE,
-            http_status=diag.status_code,
-            message=f"Endpoint público OK{auth_note} — {diag.posts_count or 0} post(s)",
-            next_action="Rode search --live-only",
-            raw_response_snippet=snippet,
-        )
-
-    if diag.status_code == 403:
-        return HealthCheckResult(
-            source="reddit",
-            status=HealthStatus.ERROR,
-            data_mode=ConnectorDataMode.UNAVAILABLE,
-            http_status=403,
-            message=f"Bloqueado (403){auth_note} — configure REDDIT_USER_AGENT ou OAuth",
-            next_action="Personalize .env e teste em rede residencial",
-            raw_response_snippet=snippet,
-        )
-
-    return HealthCheckResult(
-        source="reddit",
-        status=HealthStatus.ERROR,
-        data_mode=ConnectorDataMode.UNAVAILABLE,
-        http_status=diag.status_code,
-        message=(diag.error_message or f"Falha HTTP {diag.status_code}") + auth_note,
-        next_action=(diag.suggestions[0] if diag.suggestions else "Rode test-reddit"),
-        raw_response_snippet=snippet,
-    )
+    return reddit_to_health(diag)
 
 
 def _check_sqlite() -> HealthCheckResult:
@@ -288,6 +257,9 @@ def display_doctor_table(console: Console, results: list[HealthCheckResult]) -> 
         HealthStatus.OK: "green",
         HealthStatus.WARNING: "yellow",
         HealthStatus.ERROR: "red",
+        HealthStatus.BLOCKED: "red",
+        HealthStatus.PENDING_APPROVAL: "yellow",
+        HealthStatus.REQUIRES_AUTH: "yellow",
     }
 
     for r in results:

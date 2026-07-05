@@ -36,6 +36,11 @@ from src.market_snapshot import display_market_snapshot
 from src.models import DataMode, RadarResult, tag_results
 from src.paths import DEFAULT_CARDS, DEFAULT_CSV, DEFAULT_DB, DEFAULT_SOURCES, PROJECT_ROOT
 from src.reddit_auth import REDDIT_ENV_FIELDS, RedditAuthStatus, inspect_reddit_env
+from src.reddit_policy import (
+    REDDIT_PENDING_MESSAGE,
+    get_reddit_policy_status,
+    is_reddit_pending_approval,
+)
 from src.reporting import display_market_report
 from src.search_modes import SearchMode, resolve_search_mode
 from src.setup_env import run_setup_env
@@ -121,6 +126,12 @@ def _run_reddit_search(
             results.extend(reddit_mock(card))
         return results, 0
 
+    if is_reddit_pending_approval():
+        console.print("[yellow]  Fonte desabilitada — PENDING_APPROVAL[/yellow]")
+        console.print(f"[dim]  {REDDIT_PENDING_MESSAGE}[/dim]")
+        console.print("[dim]  Use import-prices ou Mercado Livre.[/dim]")
+        return [], 0
+
     connector = RedditConnector(
         subreddits=reddit_cfg.get("subreddits"),
         query_suffix=reddit_cfg.get("query_suffix", "pokemon card"),
@@ -130,19 +141,35 @@ def _run_reddit_search(
     console.print(f"[dim]  Modo Reddit: {mode_label}[/dim]")
 
     if mode == SearchMode.LIVE_ONLY and not connector.auth_ok:
-        console.print(f"[yellow]  Auth: {connector.auth_result.status.value} — {connector.auth_result.message}[/yellow]")
-        _print_source_error("Reddit", "Rode setup-env e test-reddit-auth")
-        return [], 1
+        if connector.auth_result.status == RedditAuthStatus.MISSING_CREDENTIALS:
+            console.print("[yellow]  Reddit REQUIRES_AUTH — configure .env[/yellow]")
+        else:
+            console.print(
+                f"[yellow]  Auth: {connector.auth_result.status.value} — "
+                f"{connector.auth_result.message}[/yellow]"
+            )
+        if connector.is_gated:
+            console.print(f"[dim]  {REDDIT_PENDING_MESSAGE}[/dim]")
+            return [], 0
+        _print_source_error("Reddit", "Rode setup-env e reddit-policy-status")
+        return [], 0
 
     results = tag_results(
         connector.search_cards(card_list, limit_per_card=limit),
         DataMode.LIVE,
     )
+    if connector.is_gated:
+        console.print("[yellow]  Reddit — PENDING_APPROVAL[/yellow]")
+        console.print(f"[dim]  {REDDIT_PENDING_MESSAGE}[/dim]")
+        return results, 0
+
     if results:
         return results, 0
     if mode == SearchMode.LIVE_ONLY:
-        _print_source_error("Reddit", "Configure OAuth no .env ou teste em rede residencial")
-        return [], 1
+        if is_reddit_pending_approval():
+            return [], 0
+        _print_source_error("Reddit", "Rode reddit-policy-status para próximos passos")
+        return [], 0
     if mode == SearchMode.ALLOW_MOCK:
         console.print("[yellow]  Reddit vazio — fallback mock[/yellow]")
         mock_results: list[RadarResult] = []
@@ -195,6 +222,53 @@ def _run_ml_search(
     return [], 0
 
 
+@app.command("reddit-policy-status")
+def reddit_policy_status() -> None:
+    """Status de política/aprovação da API Reddit (fonte gated)."""
+    console.print("[bold blue]📋 Reddit — política e aprovação de API[/bold blue]\n")
+    status = get_reddit_policy_status()
+
+    table = Table(show_lines=True)
+    table.add_column("Verificação")
+    table.add_column("Resultado")
+    table.add_row(".env existe", "[green]sim[/green]" if status.env_exists else "[red]não[/red]")
+    table.add_row(
+        "OAuth configurado",
+        "[green]sim[/green]" if status.oauth_configured else "[yellow]não[/yellow]",
+    )
+    table.add_row(
+        "REDDIT_USER_AGENT",
+        "[green]sim[/green]" if status.user_agent_configured else "[yellow]não[/yellow]",
+    )
+    table.add_row(
+        "Último HTTP",
+        str(status.last_http_status) if status.last_http_status is not None else "—",
+    )
+    table.add_row(
+        "Último status",
+        status.last_health_status or "—",
+    )
+    table.add_row(
+        "Pending approval",
+        "[yellow]sim[/yellow]" if status.pending_approval else "[green]não[/green]",
+    )
+    table.add_row(
+        "Requires auth",
+        "[yellow]sim[/yellow]" if status.requires_auth else "[green]não[/green]",
+    )
+    console.print(table)
+
+    if status.pending_approval:
+        console.print()
+        console.print(Panel(REDDIT_PENDING_MESSAGE, border_style="yellow", title="Fonte desabilitada"))
+
+    console.print(f"\n[bold]Próxima ação:[/bold] {status.next_action}")
+    console.print(
+        "\n[dim]Reddit é fonte opcional. Use import-prices (Liga/MYP) e Mercado Livre "
+        "para validar o MVP sem Reddit.[/dim]"
+    )
+
+
 @app.command("setup-env")
 def setup_env() -> None:
     """Prepara .env a partir de .env.example (edição manual)."""
@@ -239,8 +313,8 @@ def test_reddit_auth() -> None:
 
     if auth.status == RedditAuthStatus.LIVE and result.posts:
         console.print("\n[green]✓ Reddit OAuth funcionando — pronto para search-reddit[/green]")
-    elif auth.status == RedditAuthStatus.BLOCKED:
-        console.print("\n[yellow]Bloqueado (403) — teste em rede residencial com OAuth configurado[/yellow]")
+    elif auth.status == RedditAuthStatus.PENDING_APPROVAL or result.status_code == 403:
+        console.print(f"\n[yellow]{REDDIT_PENDING_MESSAGE}[/yellow]")
     elif auth.status == RedditAuthStatus.MISSING_CREDENTIALS:
         console.print("\n[yellow]Preencha .env e rode setup-env[/yellow]")
     else:
@@ -258,19 +332,24 @@ def search_reddit(
     console.print(f"[bold blue]🔍 Busca Reddit — live[/bold blue]\n")
     console.print(f"[dim]Query: {query}[/dim]\n")
 
+    if is_reddit_pending_approval():
+        console.print(f"[yellow]{REDDIT_PENDING_MESSAGE}[/yellow]")
+        console.print("[dim]Rode reddit-policy-status para detalhes.[/dim]")
+        raise typer.Exit(1)
+
     connector = RedditConnector(require_oauth=False)
     console.print(f"[dim]Modo: {connector.auth_mode}[/dim]")
 
     if not connector.auth_ok:
         console.print(f"[red]Auth falhou: {connector.auth_result.message}[/red]")
-        console.print("[dim]Rode setup-env e test-reddit-auth[/dim]")
+        console.print("[dim]Rode setup-env e reddit-policy-status[/dim]")
         raise typer.Exit(1)
 
     results = tag_results(connector.search_query(query, limit=limit), DataMode.LIVE)
     if not results:
         console.print("[yellow]Nenhum resultado live do Reddit.[/yellow]")
-        if connector.auth_result.status == RedditAuthStatus.BLOCKED:
-            console.print("[dim]HTTP 403 — teste em rede residencial[/dim]")
+        if connector.is_gated:
+            console.print(f"[dim]{REDDIT_PENDING_MESSAGE}[/dim]")
         raise typer.Exit(1)
 
     saved = save_results(results)
@@ -505,7 +584,14 @@ def source_status() -> None:
 
     for row in rows:
         st = row["status"]
-        style = {"OK": "green", "WARNING": "yellow", "ERROR": "red"}.get(st, "white")
+        style = {
+            "OK": "green",
+            "WARNING": "yellow",
+            "ERROR": "red",
+            "BLOCKED": "red",
+            "PENDING_APPROVAL": "yellow",
+            "REQUIRES_AUTH": "yellow",
+        }.get(st, "white")
         table.add_row(
             row["source"],
             f"[{style}]{st}[/{style}]",

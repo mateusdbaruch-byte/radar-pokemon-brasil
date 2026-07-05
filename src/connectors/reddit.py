@@ -21,7 +21,11 @@ from src.reddit_auth import (
     credential_requirements_met,
     get_user_agent,
 )
-from src.scoring import apply_scoring_to_result, extract_price_from_text
+from src.reddit_policy import (
+    REDDIT_PENDING_MESSAGE,
+    is_reddit_policy_block,
+    persist_reddit_gated,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +105,8 @@ def diagnose_search(
             is_valid_json = False
 
         auth_status = auth_result.status.value
-        if response.status_code == 403:
-            auth_status = RedditAuthStatus.BLOCKED.value
+        if is_reddit_policy_block(response.status_code, preview):
+            auth_status = RedditAuthStatus.PENDING_APPROVAL.value
 
         needs_oauth, oauth_message = _assess_oauth_need(
             status_code=response.status_code,
@@ -191,13 +195,14 @@ def test_reddit_auth_and_search(query: str = "pokemon tcg brasil", limit: int = 
     params = {"q": query, "limit": min(limit, 25), "sort": "new", "type": "link"}
     try:
         response = session.get(REDDIT_SEARCH_URL, params=params, timeout=15)
-        if response.status_code == 403:
+        if is_reddit_policy_block(response.status_code, response.text[:500]):
             auth_result = RedditAuthResult(
-                status=RedditAuthStatus.BLOCKED,
+                status=RedditAuthStatus.PENDING_APPROVAL,
                 auth_mode=auth_result.auth_mode,
-                message="HTTP 403 — bloqueado (IP/rede ou credenciais insuficientes)",
+                message=REDDIT_PENDING_MESSAGE,
                 http_status=403,
             )
+            persist_reddit_gated(403, response.text[:500], auth_result.auth_mode)
             return RedditSearchResult(posts=[], auth_result=auth_result, status_code=403)
 
         if response.status_code != 200:
@@ -323,6 +328,11 @@ class RedditConnector:
         self.session = requests.Session()
         self.auth_result = apply_reddit_auth(self.session)
         self.auth_mode = self.auth_result.auth_mode
+        self._gated = False
+
+    @property
+    def is_gated(self) -> bool:
+        return self._gated or self.auth_result.status == RedditAuthStatus.PENDING_APPROVAL
 
     @property
     def uses_oauth(self) -> bool:
@@ -343,6 +353,9 @@ class RedditConnector:
         limit: int = 10,
         subreddit: str | None = None,
     ) -> list[dict[str, Any]]:
+        if self.is_gated:
+            return []
+
         if not self.auth_ok:
             logger.warning(
                 "Reddit auth não OK (%s) — busca ignorada",
@@ -367,14 +380,16 @@ class RedditConnector:
                 logger.warning("Reddit rate limit (429); aguardando 5s...")
                 time.sleep(5)
                 response = self.session.get(url, params=params, timeout=15)
-            if response.status_code == 403:
+            if is_reddit_policy_block(response.status_code, response.text[:500]):
+                self._gated = True
                 self.auth_result = RedditAuthResult(
-                    status=RedditAuthStatus.BLOCKED,
+                    status=RedditAuthStatus.PENDING_APPROVAL,
                     auth_mode=self.auth_mode,
-                    message="HTTP 403 — bloqueado",
+                    message=REDDIT_PENDING_MESSAGE,
                     http_status=403,
                 )
-                logger.warning("Reddit 403 — bloqueado (%s)", self.auth_mode)
+                persist_reddit_gated(403, response.text[:500], self.auth_mode)
+                logger.warning(REDDIT_PENDING_MESSAGE)
                 return []
             if response.status_code != 200:
                 logger.error("Reddit HTTP %s — busca ignorada", response.status_code)
@@ -461,11 +476,16 @@ class RedditConnector:
         return results[:limit]
 
     def search_card(self, card_name: str, limit: int = 10) -> list[RadarResult]:
+        if self.is_gated:
+            return []
+
         query = build_search_query(card_name, self.query_suffix)
         results: list[RadarResult] = []
         seen_urls: set[str] = set()
 
         for subreddit in self.subreddits:
+            if self.is_gated:
+                break
             posts = self._search(query, limit=limit, subreddit=subreddit)
             for post in posts:
                 url = post.get("permalink", post.get("url", ""))
@@ -477,7 +497,7 @@ class RedditConnector:
                     results.append(result)
             time.sleep(self.request_delay)
 
-        if len(results) < limit // 2:
+        if len(results) < limit // 2 and not self.is_gated:
             posts = self._search(query, limit=limit)
             for post in posts:
                 url = post.get("permalink", post.get("url", ""))
@@ -497,9 +517,14 @@ class RedditConnector:
     ) -> list[RadarResult]:
         all_results: list[RadarResult] = []
         for card in cards:
+            if self.is_gated:
+                logger.warning("Reddit gated — interrompendo buscas restantes")
+                break
             logger.info("Reddit: buscando %s...", card)
             card_results = self.search_card(card, limit=limit_per_card)
             all_results.extend(card_results)
+            if self.is_gated:
+                break
             time.sleep(self.request_delay)
         return all_results
 

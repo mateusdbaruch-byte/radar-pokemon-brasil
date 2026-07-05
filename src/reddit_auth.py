@@ -28,6 +28,7 @@ class RedditAuthStatus(str, Enum):
     AUTH_FAILED = "auth_failed"
     MISSING_CREDENTIALS = "missing_credentials"
     BLOCKED = "blocked"
+    PENDING_APPROVAL = "pending_approval"
     PUBLIC = "public"
 
 
@@ -188,5 +189,6 @@ def auth_status_to_connector_mode(status: RedditAuthStatus) -> str:
         RedditAuthStatus.AUTH_FAILED: "auth_failed",
         RedditAuthStatus.MISSING_CREDENTIALS: "missing_credentials",
         RedditAuthStatus.BLOCKED: "blocked",
+        RedditAuthStatus.PENDING_APPROVAL: "pending_approval",
     }
     return mapping.get(status, "unavailable")
