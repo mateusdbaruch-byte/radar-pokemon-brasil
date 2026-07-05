@@ -17,6 +17,7 @@ from src.connectors.web_search import (
 from src.models import DataMode
 from src.opportunity_db import fetch_wishlist_leads
 from src.opportunity_models import Opportunity
+from src.opportunity_quality import QualityFilterConfig
 from src.opportunity_scoring import score_opportunity, wishlist_lead_to_opportunity
 from src.source_registry import SourceAccess, SourceInfo, get_source_registry, parse_source_list
 
@@ -31,6 +32,7 @@ class ScanResult:
     messages: list[str] = field(default_factory=list)
     web_search_stats: WebSearchScanStats | None = None
     urls_deduplicated_in_scan: int = 0
+    results_rejected: int = 0
     live_opportunities: int = 0
     opt_in_opportunities: int = 0
 
@@ -49,6 +51,7 @@ def _scan_web_search(
     mode: ScanMode,
     max_queries: int | None,
     on_progress: ProgressCallback | None,
+    quality_config: QualityFilterConfig | None = None,
 ) -> tuple[list[Opportunity], WebSearchScanStats | None]:
     config = WebSearchConfig.from_env(mode)
     connector = WebSearchConnector(config=config)
@@ -63,6 +66,7 @@ def _scan_web_search(
         mode=mode,
         max_queries=max_queries,
         on_progress=on_progress,
+        quality_config=quality_config,
     )
     return scan.opportunities, scan.stats
 
@@ -118,11 +122,19 @@ def scan_opportunities(
     mode: ScanMode = ScanMode.LIGHT,
     max_queries: int | None = None,
     on_web_search_progress: ProgressCallback | None = None,
+    strict: bool = False,
+    buyer_only: bool = False,
+    seller_only: bool = False,
 ) -> ScanResult:
     """Executa scan nas fontes selecionadas."""
     result = ScanResult()
     registry = get_source_registry()
     selected = parse_source_list(sources)
+    quality_config = QualityFilterConfig(
+        strict=strict,
+        buyer_only=buyer_only,
+        seller_only=seller_only,
+    )
 
     for source_name in selected:
         info = registry.get(source_name)
@@ -151,10 +163,12 @@ def scan_opportunities(
                     mode,
                     max_queries,
                     on_web_search_progress,
+                    quality_config,
                 )
                 result.web_search_stats = stats
                 if stats:
                     result.urls_deduplicated_in_scan = stats.urls_deduplicated
+                    result.results_rejected = stats.results_rejected
             elif source_name == "wishlist":
                 opps = _scan_wishlist(cards)
             elif source_name == "mercado_livre":
@@ -170,7 +184,8 @@ def scan_opportunities(
             elif source_name == "web_search" and stats and stats.queries_executed > 0:
                 result.messages.append(
                     f"{info.label}: {stats.queries_success}/{stats.queries_executed} queries OK, "
-                    f"sem novos hits"
+                    f"{stats.results_rejected} rejeitados, "
+                    f"{stats.opportunities_built} aceitos"
                 )
             else:
                 result.messages.append(f"{info.label}: nenhum resultado nesta execução")

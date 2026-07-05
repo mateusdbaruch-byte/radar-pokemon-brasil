@@ -138,7 +138,11 @@ class TestWebSearchScan:
 
         connector = WebSearchConnector(config=WebSearchConfig(delay_seconds=0))
 
-        shared_hit = WebSearchHit(title="Oferta", snippet="vendo", url="https://ex.com/shared")
+        shared_hit = WebSearchHit(
+            title="Oferta Charizard Pokémon TCG",
+            snippet="vendo carta holo procuro compradores",
+            url="https://ex.com/shared",
+        )
 
         def mock_search_query(query, limit=10):
             from src.connectors.web_search import WebSearchQueryResult

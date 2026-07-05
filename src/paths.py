@@ -12,6 +12,8 @@ DATA_DIR = PROJECT_ROOT / "data"
 
 DEFAULT_CARDS = CONFIG_DIR / "cards.yml"
 DEFAULT_WATCHLIST = CONFIG_DIR / "watchlist.yml"
+BLOCKED_DOMAINS = CONFIG_DIR / "blocked_domains.yml"
+PRIORITY_DOMAINS = CONFIG_DIR / "priority_domains.yml"
 DEFAULT_KEYWORDS = CONFIG_DIR / "keywords.yml"
 DEFAULT_SOURCES = CONFIG_DIR / "sources.yml"
 DEFAULT_DB = DATA_DIR / "radar.db"

@@ -12,7 +12,9 @@ from typing import Callable
 import requests
 
 from src.models import DataMode
+from src.opportunity_db import save_rejected_result
 from src.opportunity_models import Opportunity
+from src.opportunity_quality import QualityFilterConfig, evaluate_hit
 from src.opportunity_scoring import score_opportunity
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,7 @@ class WebSearchScanStats:
     queries_retried: int = 0
     hits_found: int = 0
     opportunities_built: int = 0
+    results_rejected: int = 0
     urls_deduplicated: int = 0
     elapsed_seconds: float = 0.0
 
@@ -163,6 +166,8 @@ class WebSearchConnector:
                     "q": query,
                     "num": min(limit, 10),
                     "lr": "lang_pt",
+                    "hl": "pt",
+                    "cr": "countryBR",
                 },
                 timeout=timeout,
             )
@@ -175,7 +180,8 @@ class WebSearchConnector:
                     "api_key": os.getenv("SERPAPI_KEY", "").strip(),
                     "q": query,
                     "engine": "google",
-                    "hl": "pt-br",
+                    "google_domain": "google.com.br",
+                    "hl": "pt",
                     "gl": "br",
                     "num": min(limit, 20),
                 },
@@ -275,10 +281,12 @@ class WebSearchConnector:
         mode: ScanMode = ScanMode.LIGHT,
         max_queries: int | None = None,
         on_progress: ProgressCallback | None = None,
+        quality_config: QualityFilterConfig | None = None,
     ) -> WebSearchScanResult:
         """Busca oportunidades para cada carta usando templates de intenção."""
         scan = WebSearchScanResult()
         stats = scan.stats
+        qcfg = quality_config or QualityFilterConfig()
 
         if not self.is_configured():
             return scan
@@ -332,7 +340,24 @@ class WebSearchConnector:
                     url=hit.url,
                     urgency_hint=55,
                 )
+                evaluation = evaluate_hit(
+                    hit.title, hit.snippet, hit.url, card, opp, qcfg
+                )
+                if not evaluation.accepted:
+                    save_rejected_result(
+                        query, hit.title, hit.snippet, hit.url, evaluation.reason
+                    )
+                    stats.results_rejected += 1
+                    continue
+
                 opp.data_mode = DataMode.LIVE
+                opp.why_saved = evaluation.why_saved
+                if evaluation.refined_type:
+                    opp.opportunity_type = evaluation.refined_type
+                    from src.opportunity_scoring import recommended_action_for
+                    opp.recommended_action = recommended_action_for(
+                        opp.opportunity_type, opp.intent_score
+                    )
                 opp.set_raw_data({
                     "query": query,
                     "hit": hit.__dict__,

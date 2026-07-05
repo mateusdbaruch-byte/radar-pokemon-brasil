@@ -19,7 +19,7 @@ class TestOpportunityScoring:
             platform="test",
         )
         assert opp.intent_score >= 70
-        assert opp.opportunity_type == OpportunityType.BUYER_INTENT
+        assert opp.opportunity_type == OpportunityType.BUYER_DEMAND
 
     def test_wishlist_lead(self):
         lead = WishlistLead(
@@ -29,7 +29,7 @@ class TestOpportunityScoring:
             max_price=300.0,
         )
         opp = wishlist_lead_to_opportunity(lead)
-        assert opp.opportunity_type == OpportunityType.WISHLIST_LEAD
+        assert opp.opportunity_type == OpportunityType.HIGH_INTENT_LEAD
         assert opp.urgency_score >= 80
         from src.models import DataMode
         assert opp.data_mode == DataMode.OPT_IN

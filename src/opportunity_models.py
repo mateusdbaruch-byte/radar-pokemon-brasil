@@ -20,6 +20,12 @@ class OpportunityType(str, Enum):
     MARKETPLACE_LISTING = "marketplace_listing"
     WEB_SIGNAL = "web_signal"
     DISCUSSION = "discussion"
+    BUYER_DEMAND = "buyer_demand"
+    HIGH_INTENT_LEAD = "high_intent_lead"
+    DISCUSSION_SIGNAL = "discussion_signal"
+    SELLER_SUPPLY = "seller_supply"
+    URGENT_SALE = "urgent_sale"
+    UNDERPRICED_LISTING = "underpriced_listing"
 
 
 class OpportunityStatus(str, Enum):
@@ -51,6 +57,7 @@ class Opportunity(BaseModel):
     collected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     raw_data_json: str = "{}"
     recommended_action: str = ""
+    why_saved: str = ""
 
     def to_db_row(self) -> dict[str, Any]:
         return {
@@ -74,6 +81,7 @@ class Opportunity(BaseModel):
             "collected_at": self.collected_at.isoformat(),
             "raw_data_json": self.raw_data_json,
             "recommended_action": self.recommended_action,
+            "why_saved": self.why_saved,
         }
 
     @classmethod
@@ -104,6 +112,7 @@ class Opportunity(BaseModel):
             ),
             raw_data_json=row.get("raw_data_json") or "{}",
             recommended_action=row.get("recommended_action") or "",
+            why_saved=row.get("why_saved") or "",
         )
 
     def set_raw_data(self, data: Any) -> None:

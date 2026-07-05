@@ -47,7 +47,12 @@ from src.paths import (
 )
 from src.opportunity_db import save_opportunities
 from src.opportunity_models import WishlistLead
-from src.opportunity_reporting import display_opportunity_inbox, display_opportunity_report
+from src.opportunity_reporting import (
+    display_opportunity_inbox,
+    display_opportunity_report,
+    display_quality_report,
+    display_rejected_report,
+)
 from src.opportunity_scanner import scan_opportunities
 from src.opportunity_db import save_wishlist_lead
 from src.wishlist import import_wishlist_csv, validate_wishlist_csv
@@ -310,6 +315,21 @@ def scan_opportunities_cmd(
         "--max-queries",
         help="Limite máximo de queries web_search (0 = usar .env)",
     ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Filtro rigoroso: exige contexto Pokémon, intenção e confidence >= 65",
+    ),
+    buyer_only: bool = typer.Option(
+        False,
+        "--buyer-only",
+        help="Salvar apenas demanda de compra (buyer_demand, high_intent_lead, discussion_signal)",
+    ),
+    seller_only: bool = typer.Option(
+        False,
+        "--seller-only",
+        help="Salvar apenas ofertas de venda (seller_supply, urgent_sale, underpriced_listing)",
+    ),
 ) -> None:
     """Escaneia oportunidades automatizadas nas fontes disponíveis."""
     if card.strip():
@@ -322,13 +342,25 @@ def scan_opportunities_cmd(
         console.print(f"[red]Nenhuma carta em {cards}[/red]")
         raise typer.Exit(1)
 
+    if buyer_only and seller_only:
+        console.print("[red]Use apenas um: --buyer-only ou --seller-only[/red]")
+        raise typer.Exit(1)
+
     query_cap = max_queries if max_queries > 0 else None
     scan_start = time.monotonic()
+    filter_notes = []
+    if strict:
+        filter_notes.append("strict")
+    if buyer_only:
+        filter_notes.append("buyer-only")
+    if seller_only:
+        filter_notes.append("seller-only")
+    filters_label = ", ".join(filter_notes) if filter_notes else "padrão"
 
     console.print(
         f"[bold blue]🎯 Opportunity Radar — scan ({mode.value})[/bold blue]\n"
         f"[dim]Cartas: {len(card_list)} ({cards_label}) | Fontes: {sources} | "
-        f"max-queries: {query_cap or 'env'}[/dim]\n"
+        f"max-queries: {query_cap or 'env'} | filtros: {filters_label}[/dim]\n"
     )
 
     def _on_web_progress(
@@ -355,6 +387,9 @@ def scan_opportunities_cmd(
         mode=mode,
         max_queries=query_cap,
         on_web_search_progress=_on_web_progress if "web_search" in sources else None,
+        strict=strict,
+        buyer_only=buyer_only,
+        seller_only=seller_only,
     )
 
     elapsed = time.monotonic() - scan_start
@@ -373,6 +408,7 @@ def scan_opportunities_cmd(
                 "[yellow]Nenhuma oportunidade coletada.[/yellow]\n\n"
                 "  • Configure WEB_SEARCH_PROVIDER no .env\n"
                 "  • import-wishlist para leads opt-in\n"
+                "  • Rode rejected-report para ver o que foi filtrado\n"
                 "  • doctor para diagnóstico",
                 border_style="yellow",
                 title="Scan vazio",
@@ -433,7 +469,8 @@ def _print_scan_summary(
             f"{ws.queries_retried} com retry"
         )
         console.print(
-            f"  Web hits: {ws.hits_found} | dedup no scan: {ws.urls_deduplicated}"
+            f"  Web hits: {ws.hits_found} | rejeitados: {ws.results_rejected} | "
+            f"dedup no scan: {ws.urls_deduplicated}"
         )
     console.print(f"  Tempo total: {elapsed:.1f}s")
     console.print(f"  Oportunidades salvas: {saved} (+ {merged} mescladas por URL)")
@@ -444,6 +481,20 @@ def _print_scan_summary(
     console.print(
         f"  URLs deduplicadas (DB): {dedup_db + result.urls_deduplicated_in_scan}"
     )
+
+
+@app.command("rejected-report")
+def rejected_report_cmd(
+    limit: int = typer.Option(10, "--limit", "-n"),
+) -> None:
+    """Relatório de resultados rejeitados pelo filtro de qualidade."""
+    display_rejected_report(console, limit=limit)
+
+
+@app.command("quality-report")
+def quality_report_cmd() -> None:
+    """Relatório de qualidade — aproveitamento e recomendações."""
+    display_quality_report(console)
 
 
 @app.command("web-search-test")

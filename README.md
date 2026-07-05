@@ -13,6 +13,19 @@ Detecta compradores potenciais, sinais públicos na web e leads opt-in — dentr
 python3 -m src.main web-search-test --query "procuro Charizard Pokémon TCG" --limit 5
 ```
 
+### Scan com precisão (strict + buyer-only)
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main scan-opportunities --card Charizard --sources web_search --limit 5 --mode light --strict --buyer-only
+python3 -m src.main opportunity-inbox
+python3 -m src.main rejected-report
+python3 -m src.main quality-report
+```
+
+Filtros de qualidade: `config/blocked_domains.yml`, `config/priority_domains.yml`.  
+Modos: `--strict`, `--buyer-only`, `--seller-only`.
+
 ### Scan leve (recomendado para começar)
 
 ```bash
@@ -372,6 +385,10 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main scan-opportunities --mode deep` | Scan profundo (mais templates) |
 | `python3 -m src.main scan-opportunities --card Charizard` | Uma carta específica |
 | `python3 -m src.main scan-opportunities --max-queries 10` | Limita queries web_search |
+| `python3 -m src.main scan-opportunities --strict` | Filtro rigoroso (confidence >= 65) |
+| `python3 -m src.main scan-opportunities --buyer-only` | Apenas demanda de compra |
+| `python3 -m src.main scan-opportunities --seller-only` | Apenas ofertas de venda |
+| `python3 -m src.main rejected-report` | Resultados filtrados/rejeitados |
 | `python3 -m src.main web-search-test` | Testa uma query web_search |
 | `python3 -m src.main opportunity-inbox` | Caixa de entrada de oportunidades |
 | `python3 -m src.main opportunity-report` | Relatório consolidado |
