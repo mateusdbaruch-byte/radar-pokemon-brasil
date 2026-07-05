@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import time
+
 import typer
 import yaml
 from dotenv import load_dotenv
@@ -13,6 +15,7 @@ from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.table import Table
 
+from src.connectors.web_search import ScanMode, WebSearchConnector, WebSearchQueryResult
 from src.connector_health import (
     ConnectorDataMode,
     HealthCheckResult,
@@ -289,25 +292,72 @@ def load_watchlist(path: Path) -> list[str]:
 @app.command("scan-opportunities")
 def scan_opportunities_cmd(
     cards: Path = typer.Option(DEFAULT_WATCHLIST, "--cards", "-c"),
+    card: str = typer.Option("", "--card", help="Carta específica (sobrescreve --cards)"),
     sources: str = typer.Option(
         "web_search,wishlist",
         "--sources",
         help="Fontes: web_search,wishlist,mercado_livre,...",
     ),
     limit: int = typer.Option(20, "--limit", "-l"),
+    mode: ScanMode = typer.Option(
+        ScanMode.LIGHT,
+        "--mode",
+        "-m",
+        help="light = menos queries; deep = mais templates e delay maior",
+    ),
+    max_queries: int = typer.Option(
+        0,
+        "--max-queries",
+        help="Limite máximo de queries web_search (0 = usar .env)",
+    ),
 ) -> None:
     """Escaneia oportunidades automatizadas nas fontes disponíveis."""
-    card_list = load_watchlist(cards)
+    if card.strip():
+        card_list = [card.strip()]
+        cards_label = card.strip()
+    else:
+        card_list = load_watchlist(cards)
+        cards_label = str(cards)
     if not card_list:
         console.print(f"[red]Nenhuma carta em {cards}[/red]")
         raise typer.Exit(1)
 
+    query_cap = max_queries if max_queries > 0 else None
+    scan_start = time.monotonic()
+
     console.print(
-        f"[bold blue]🎯 Opportunity Radar — scan[/bold blue]\n"
-        f"[dim]Cartas: {len(card_list)} | Fontes: {sources}[/dim]\n"
+        f"[bold blue]🎯 Opportunity Radar — scan ({mode.value})[/bold blue]\n"
+        f"[dim]Cartas: {len(card_list)} ({cards_label}) | Fontes: {sources} | "
+        f"max-queries: {query_cap or 'env'}[/dim]\n"
     )
 
-    result = scan_opportunities(card_list, sources, limit=limit)
+    def _on_web_progress(
+        query_result: WebSearchQueryResult,
+        current: int,
+        total: int,
+    ) -> None:
+        status = "[green]OK[/green]" if query_result.success else "[red]falha[/red]"
+        if query_result.timed_out:
+            status = "[yellow]timeout[/yellow]"
+        retry_note = ""
+        if query_result.retries > 0:
+            retry_note = f" | [yellow]retry×{query_result.retries}[/yellow]"
+        console.print(
+            f"[cyan]  [{current}/{total}][/cyan] {query_result.query[:70]}"
+            f" → {len(query_result.hits)} hit(s) | {status}"
+            f" | {query_result.elapsed_seconds:.1f}s{retry_note}"
+        )
+
+    result = scan_opportunities(
+        card_list,
+        sources,
+        limit=limit,
+        mode=mode,
+        max_queries=query_cap,
+        on_web_search_progress=_on_web_progress if "web_search" in sources else None,
+    )
+
+    elapsed = time.monotonic() - scan_start
 
     for msg in result.messages:
         console.print(f"[dim]  • {msg}[/dim]")
@@ -328,27 +378,123 @@ def scan_opportunities_cmd(
                 title="Scan vazio",
             )
         )
+        if result.web_search_stats:
+            _print_scan_summary(result, elapsed, saved=0, merged=0, dedup_db=0)
         raise typer.Exit(1)
 
-    saved = save_opportunities(result.opportunities)
-    console.print(f"\n[green]✓ {saved} oportunidades salvas[/green]")
-    console.print(f"[dim]Fontes live nesta execução: {', '.join(result.live_sources) or '—'}[/dim]\n")
+    save_result = save_opportunities(result.opportunities)
+    total_saved = save_result.saved + save_result.merged
+    console.print(f"\n[green]✓ {total_saved} oportunidades salvas[/green]")
+    console.print(
+        f"[dim]Fontes live nesta execução: {', '.join(result.live_sources) or '—'}[/dim]\n"
+    )
+
+    _print_scan_summary(
+        result,
+        elapsed,
+        saved=save_result.saved,
+        merged=save_result.merged,
+        dedup_db=save_result.urls_deduplicated,
+    )
 
     table = Table(title="Top oportunidades", show_lines=True)
     table.add_column("Carta", style="bold")
     table.add_column("Score", justify="right")
     table.add_column("Tipo")
     table.add_column("Fonte")
-    table.add_column("Evidência", max_width=40)
+    table.add_column("data_mode")
+    table.add_column("Evidência", max_width=35)
     for opp in result.opportunities[:10]:
         table.add_row(
             opp.normalized_card_name,
             str(opp.opportunity_score),
             opp.opportunity_type.value,
             opp.source,
-            opp.evidence_text[:40],
+            opp.data_mode.value,
+            opp.evidence_text[:35],
         )
     console.print(table)
+
+
+def _print_scan_summary(
+    result,
+    elapsed: float,
+    *,
+    saved: int,
+    merged: int,
+    dedup_db: int,
+) -> None:
+    console.print("[bold]Resumo do scan[/bold]")
+    ws = result.web_search_stats
+    if ws:
+        console.print(
+            f"  Queries: {ws.queries_executed}/{ws.queries_planned} executadas | "
+            f"{ws.queries_success} sucesso | {ws.queries_timeout} timeout | "
+            f"{ws.queries_retried} com retry"
+        )
+        console.print(
+            f"  Web hits: {ws.hits_found} | dedup no scan: {ws.urls_deduplicated}"
+        )
+    console.print(f"  Tempo total: {elapsed:.1f}s")
+    console.print(f"  Oportunidades salvas: {saved} (+ {merged} mescladas por URL)")
+    console.print(
+        f"  Por data_mode — live: {result.live_opportunities} | "
+        f"opt-in: {result.opt_in_opportunities}"
+    )
+    console.print(
+        f"  URLs deduplicadas (DB): {dedup_db + result.urls_deduplicated_in_scan}"
+    )
+
+
+@app.command("web-search-test")
+def web_search_test(
+    query: str = typer.Option(..., "--query", "-q", help="Query de teste"),
+    limit: int = typer.Option(5, "--limit", "-l"),
+) -> None:
+    """Testa uma única query web_search e exibe diagnóstico."""
+    connector = WebSearchConnector()
+    console.print("[bold blue]🔍 Web Search — teste único[/bold blue]\n")
+
+    if not connector.is_configured():
+        console.print(
+            Panel(
+                "[yellow]web_search não configurado.[/yellow]\n\n"
+                "Defina WEB_SEARCH_PROVIDER e a chave correspondente no .env",
+                border_style="yellow",
+                title="Não configurado",
+            )
+        )
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Provider: {connector.provider} | data_mode: live[/dim]")
+    console.print(f"[dim]Query: {query}[/dim]\n")
+
+    result = connector.search_query(query, limit=limit)
+
+    if result.success:
+        status = "[green]sucesso[/green]"
+    elif result.timed_out:
+        status = "[yellow]timeout[/yellow]"
+    else:
+        status = f"[red]falha[/red] ({result.error})"
+
+    console.print(f"[bold]Status:[/bold] {status}")
+    console.print(f"[bold]Tempo:[/bold] {result.elapsed_seconds:.2f}s")
+    console.print(f"[bold]Resultados:[/bold] {len(result.hits)}")
+    console.print(f"[bold]data_mode:[/bold] live")
+    if result.retries > 0:
+        console.print(f"[bold]Retries:[/bold] {result.retries}")
+
+    if result.hits:
+        table = Table(title="Top resultados", show_lines=True)
+        table.add_column("#", justify="right")
+        table.add_column("Título", max_width=45)
+        table.add_column("URL", max_width=40)
+        for i, hit in enumerate(result.hits[:limit], start=1):
+            table.add_row(str(i), hit.title[:45], hit.url[:40])
+        console.print(table)
+    else:
+        console.print("[yellow]Nenhum resultado retornado.[/yellow]")
 
 
 @app.command("opportunity-inbox")

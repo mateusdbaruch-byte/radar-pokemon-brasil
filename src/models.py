@@ -27,6 +27,7 @@ class DataMode(str, Enum):
     LIVE = "live"
     MOCK = "mock"
     MANUAL_IMPORT = "manual_import"
+    OPT_IN = "opt_in"
 
 
 class RadarResult(BaseModel):

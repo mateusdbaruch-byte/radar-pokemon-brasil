@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.models import IntentType
+from src.models import DataMode, IntentType
 from src.opportunity_models import Opportunity, OpportunityType, WishlistLead
 from src.scoring import apply_scoring_to_result, extract_price_from_text
 
@@ -108,6 +108,7 @@ def wishlist_lead_to_opportunity(lead: WishlistLead) -> Opportunity:
     )
     opp.opportunity_type = OpportunityType.WISHLIST_LEAD
     opp.opportunity_score = min(100, opp.opportunity_score + 15)
+    opp.data_mode = DataMode.OPT_IN
     opp.recommended_action = recommended_action_for(
         OpportunityType.WISHLIST_LEAD, opp.intent_score
     )

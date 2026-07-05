@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Callable
 
 from src.connectors.mercado_livre import MercadoLivreConnector
-from src.connectors.web_search import WebSearchConnector
+from src.connectors.web_search import (
+    ProgressCallback,
+    ScanMode,
+    WebSearchConfig,
+    WebSearchConnector,
+    WebSearchScanStats,
+)
 from src.models import DataMode
 from src.opportunity_db import fetch_wishlist_leads
 from src.opportunity_models import Opportunity
@@ -22,6 +29,10 @@ class ScanResult:
     skipped_sources: list[str] = field(default_factory=list)
     live_sources: list[str] = field(default_factory=list)
     messages: list[str] = field(default_factory=list)
+    web_search_stats: WebSearchScanStats | None = None
+    urls_deduplicated_in_scan: int = 0
+    live_opportunities: int = 0
+    opt_in_opportunities: int = 0
 
 
 def _should_skip(info: SourceInfo) -> bool:
@@ -32,12 +43,28 @@ def _should_skip(info: SourceInfo) -> bool:
     )
 
 
-def _scan_web_search(cards: list[str], limit: int) -> list[Opportunity]:
-    connector = WebSearchConnector()
+def _scan_web_search(
+    cards: list[str],
+    limit: int,
+    mode: ScanMode,
+    max_queries: int | None,
+    on_progress: ProgressCallback | None,
+) -> tuple[list[Opportunity], WebSearchScanStats | None]:
+    config = WebSearchConfig.from_env(mode)
+    connector = WebSearchConnector(config=config)
     if not connector.is_configured():
-        return []
-    per_query = max(1, limit // 7)
-    return connector.scan_cards(cards, limit_per_query=per_query)
+        return [], None
+
+    templates = connector.templates_for_mode(mode)
+    per_query = max(1, limit // max(len(templates), 1))
+    scan = connector.scan_cards(
+        cards,
+        limit_per_query=per_query,
+        mode=mode,
+        max_queries=max_queries,
+        on_progress=on_progress,
+    )
+    return scan.opportunities, scan.stats
 
 
 def _card_matches_watchlist(lead_card: str, cards: list[str]) -> bool:
@@ -78,10 +105,19 @@ def _scan_mercado_livre(cards: list[str], limit: int) -> list[Opportunity]:
     return opps
 
 
+def _count_by_data_mode(opps: list[Opportunity]) -> tuple[int, int]:
+    live = sum(1 for o in opps if o.data_mode == DataMode.LIVE)
+    opt_in = sum(1 for o in opps if o.data_mode == DataMode.OPT_IN)
+    return live, opt_in
+
+
 def scan_opportunities(
     cards: list[str],
     sources: str,
     limit: int = 20,
+    mode: ScanMode = ScanMode.LIGHT,
+    max_queries: int | None = None,
+    on_web_search_progress: ProgressCallback | None = None,
 ) -> ScanResult:
     """Executa scan nas fontes selecionadas."""
     result = ScanResult()
@@ -107,8 +143,18 @@ def scan_opportunities(
             continue
 
         try:
+            stats = None
             if source_name == "web_search":
-                opps = _scan_web_search(cards, limit)
+                opps, stats = _scan_web_search(
+                    cards,
+                    limit,
+                    mode,
+                    max_queries,
+                    on_web_search_progress,
+                )
+                result.web_search_stats = stats
+                if stats:
+                    result.urls_deduplicated_in_scan = stats.urls_deduplicated
             elif source_name == "wishlist":
                 opps = _scan_wishlist(cards)
             elif source_name == "mercado_livre":
@@ -121,14 +167,22 @@ def scan_opportunities(
             if opps:
                 result.live_sources.append(source_name)
                 result.opportunities.extend(opps)
+            elif source_name == "web_search" and stats and stats.queries_executed > 0:
+                result.messages.append(
+                    f"{info.label}: {stats.queries_success}/{stats.queries_executed} queries OK, "
+                    f"sem novos hits"
+                )
             else:
                 result.messages.append(f"{info.label}: nenhum resultado nesta execução")
 
         except Exception as exc:
             logger.exception("Erro em %s", source_name)
-            result.messages.append(f"{info.label}: erro — {exc}")
+            result.messages.append(f"{info.label}: erro parcial — {exc}")
 
     result.opportunities.sort(key=lambda o: o.opportunity_score, reverse=True)
     if limit:
         result.opportunities = result.opportunities[: limit * len(selected)]
+    result.live_opportunities, result.opt_in_opportunities = _count_by_data_mode(
+        result.opportunities
+    )
     return result

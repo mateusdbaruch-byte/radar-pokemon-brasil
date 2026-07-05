@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from src.opportunity_models import Opportunity, WishlistLead
 from src.paths import DEFAULT_DB, ensure_data_dir
@@ -55,8 +58,18 @@ CREATE_OPP_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_opp_score ON opportunities(opportunity_score DESC);
 CREATE INDEX IF NOT EXISTS idx_opp_card ON opportunities(normalized_card_name);
 CREATE INDEX IF NOT EXISTS idx_opp_status ON opportunities(status);
+CREATE INDEX IF NOT EXISTS idx_opp_url ON opportunities(url);
 CREATE INDEX IF NOT EXISTS idx_wishlist_card ON wishlist_leads(card_name);
 """
+
+
+@dataclass
+class SaveOpportunitiesResult:
+    saved: int = 0
+    merged: int = 0
+    skipped_empty_url: int = 0
+    urls_deduplicated: int = 0
+    by_data_mode: dict[str, int] = field(default_factory=dict)
 
 
 def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
@@ -70,7 +83,100 @@ def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
     return conn
 
 
-def save_opportunity(opp: Opportunity, db_path: Path | str = DEFAULT_DB) -> None:
+def normalize_url(url: str) -> str:
+    """Normaliza URL para deduplicação (sem fragmento, sem barra final)."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/") or "/"
+    return urlunparse((parsed.scheme, parsed.netloc.lower(), path, parsed.params, parsed.query, ""))
+
+
+def fetch_opportunity_by_url(
+    url: str,
+    db_path: Path | str = DEFAULT_DB,
+) -> Opportunity | None:
+    norm = normalize_url(url)
+    if not norm:
+        return None
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT * FROM opportunities WHERE url IS NOT NULL AND url != ''"
+    ).fetchall()
+    conn.close()
+    for row in rows:
+        if normalize_url(row["url"]) == norm:
+            return Opportunity.from_db_row(dict(row))
+    return None
+
+
+def _merge_opportunity(existing: Opportunity, incoming: Opportunity) -> Opportunity:
+    """Mescla oportunidade duplicada por URL, preservando a de maior score."""
+    base, extra = (
+        (existing, incoming)
+        if existing.opportunity_score >= incoming.opportunity_score
+        else (incoming, existing)
+    )
+
+    try:
+        raw = json.loads(base.raw_data_json or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+
+    try:
+        extra_raw = json.loads(extra.raw_data_json or "{}")
+    except json.JSONDecodeError:
+        extra_raw = {}
+
+    related = set(raw.get("related_cards", []))
+    related.add(base.card_name_detected)
+    related.add(extra.card_name_detected)
+    for card in extra_raw.get("related_cards", []):
+        related.add(card)
+    raw["related_cards"] = sorted(c for c in related if c)
+
+    evidence_extra = raw.setdefault("related_evidence", [])
+    for item in extra_raw.get("related_evidence", []):
+        if item not in evidence_extra:
+            evidence_extra.append(item)
+    snippet = f"[{extra.card_name_detected}] {extra.evidence_text[:200]}"
+    if snippet not in evidence_extra:
+        evidence_extra.append(snippet)
+
+    if extra.card_name_detected.lower() not in base.evidence_text.lower():
+        base.evidence_text = (
+            f"{base.evidence_text}\n[{extra.card_name_detected}] "
+            f"{extra.evidence_text[:300]}"
+        ).strip()[:2000]
+
+    base.set_raw_data(raw)
+    return base
+
+
+def save_opportunity(
+    opp: Opportunity,
+    db_path: Path | str = DEFAULT_DB,
+    *,
+    deduplicate_urls: bool = True,
+) -> str:
+    """Salva oportunidade. Retorna 'saved', 'merged' ou 'skipped'."""
+    if deduplicate_urls and opp.url:
+        existing = fetch_opportunity_by_url(opp.url, db_path)
+        if existing:
+            merged = _merge_opportunity(existing, opp)
+            conn = _conn(db_path)
+            row = merged.to_db_row()
+            cols = ", ".join(row.keys())
+            ph = ", ".join("?" for _ in row)
+            conn.execute(
+                f"INSERT OR REPLACE INTO opportunities ({cols}) VALUES ({ph})",
+                list(row.values()),
+            )
+            conn.commit()
+            conn.close()
+            return "merged"
+
     conn = _conn(db_path)
     row = opp.to_db_row()
     cols = ", ".join(row.keys())
@@ -81,15 +187,41 @@ def save_opportunity(opp: Opportunity, db_path: Path | str = DEFAULT_DB) -> None
     )
     conn.commit()
     conn.close()
+    return "saved"
 
 
 def save_opportunities(
     opps: list[Opportunity],
     db_path: Path | str = DEFAULT_DB,
-) -> int:
+    *,
+    deduplicate_urls: bool = True,
+) -> SaveOpportunitiesResult:
+    result = SaveOpportunitiesResult()
+    seen_urls: set[str] = set()
+
     for opp in opps:
-        save_opportunity(opp, db_path)
-    return len(opps)
+        mode_key = opp.data_mode.value if hasattr(opp.data_mode, "value") else str(opp.data_mode)
+        norm = normalize_url(opp.url) if opp.url else ""
+
+        if norm and norm in seen_urls:
+            result.urls_deduplicated += 1
+            continue
+
+        action = save_opportunity(opp, db_path, deduplicate_urls=deduplicate_urls)
+        if action == "merged":
+            result.merged += 1
+            if norm:
+                seen_urls.add(norm)
+        elif action == "saved":
+            result.saved += 1
+            if norm:
+                seen_urls.add(norm)
+        else:
+            result.skipped_empty_url += 1
+
+        result.by_data_mode[mode_key] = result.by_data_mode.get(mode_key, 0) + 1
+
+    return result
 
 
 def fetch_opportunities(
@@ -118,6 +250,15 @@ def count_opportunities_by_source(db_path: Path | str = DEFAULT_DB) -> dict[str,
     ).fetchall()
     conn.close()
     return {r["source"]: r["cnt"] for r in rows}
+
+
+def count_opportunities_by_data_mode(db_path: Path | str = DEFAULT_DB) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT data_mode, COUNT(*) as cnt FROM opportunities GROUP BY data_mode"
+    ).fetchall()
+    conn.close()
+    return {r["data_mode"]: r["cnt"] for r in rows}
 
 
 def save_wishlist_lead(lead: WishlistLead, db_path: Path | str = DEFAULT_DB) -> None:

@@ -7,25 +7,50 @@ Detecta compradores potenciais, sinais públicos na web e leads opt-in — dentr
 
 ## Fluxo principal (Opportunity Radar)
 
+### Teste rápido (uma query)
+
+```bash
+python3 -m src.main web-search-test --query "procuro Charizard Pokémon TCG" --limit 5
+```
+
+### Scan leve (recomendado para começar)
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main import-wishlist data/imports/wishlist_example.csv
+python3 -m src.main scan-opportunities --card Charizard --sources web_search,wishlist --limit 5 --mode light
+python3 -m src.main opportunity-inbox
+python3 -m src.main opportunity-report
+```
+
+### Scan amplo (watchlist com limite de queries)
+
+```bash
+python3 -m src.main scan-opportunities --cards config/watchlist.yml --sources web_search,wishlist --limit 5 --mode light --max-queries 20
+```
+
+### Scan profundo (mais templates, delay maior)
+
+```bash
+python3 -m src.main scan-opportunities --cards config/watchlist.yml --sources web_search --limit 10 --mode deep
+```
+
+### Diagnóstico e preparação
+
 ```bash
 # 1. Diagnóstico do ambiente
 python3 -m src.main doctor
 
-# 2. Reset e preparar wishlist opt-in
-python3 -m src.main reset-db --force
-python3 -m src.main import-wishlist data/imports/wishlist_example.csv
-
-# 3. Configurar busca web no .env (opcional mas recomendado)
+# 2. Configurar busca web no .env
 python3 -m src.main setup-env
-# WEB_SEARCH_PROVIDER=bing + BING_SEARCH_API_KEY
-
-# 4. Escanear oportunidades
-python3 -m src.main scan-opportunities --cards config/watchlist.yml --sources web_search,wishlist --limit 20
-
-# 5. Ver resultados
-python3 -m src.main opportunity-inbox
-python3 -m src.main opportunity-report
+# WEB_SEARCH_PROVIDER=serpapi + SERPAPI_KEY
+# WEB_SEARCH_TIMEOUT_SECONDS=20
+# WEB_SEARCH_DELAY_SECONDS=2
 ```
+
+**Controle de carga** (`.env`): `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_SEARCH_DELAY_SECONDS`, `WEB_SEARCH_MAX_RETRIES`, `WEB_SEARCH_MAX_QUERIES_PER_RUN`.
+
+**Modos de scan:** `--mode light` (4 templates por carta) ou `--mode deep` (mais templates, delay dobrado).
 
 Documentação completa: [`docs/AUTOMATED_OPPORTUNITY_RADAR.md`](docs/AUTOMATED_OPPORTUNITY_RADAR.md)
 
@@ -273,9 +298,10 @@ Cada resultado tem o campo **`data_mode`**:
 
 | Valor | Significado |
 |-------|-------------|
-| `live` | Coletado de API pública real (Reddit, Mercado Livre…) |
+| `live` | Coletado de API pública real (Reddit, Mercado Livre, web_search…) |
 | `mock` | Dado simulado — **não use para decisão de mercado** |
 | `manual_import` | Importado manualmente (ex.: exportação Discord) |
+| `opt_in` | Lead autorizado (wishlist) |
 
 No **relatório**, a seção **VALIDAÇÃO DOS DADOS** (no topo) mostra:
 - quantos resultados são `live`, `mock` e `manual_import`
@@ -342,6 +368,11 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | Comando | O que faz |
 |---------|-----------|
 | `python3 -m src.main scan-opportunities` | **Fluxo principal** — escaneia oportunidades |
+| `python3 -m src.main scan-opportunities --mode light` | Scan leve (menos queries) |
+| `python3 -m src.main scan-opportunities --mode deep` | Scan profundo (mais templates) |
+| `python3 -m src.main scan-opportunities --card Charizard` | Uma carta específica |
+| `python3 -m src.main scan-opportunities --max-queries 10` | Limita queries web_search |
+| `python3 -m src.main web-search-test` | Testa uma query web_search |
 | `python3 -m src.main opportunity-inbox` | Caixa de entrada de oportunidades |
 | `python3 -m src.main opportunity-report` | Relatório consolidado |
 | `python3 -m src.main add-wishlist-lead` | Cadastra lead opt-in |

@@ -31,6 +31,8 @@ class TestOpportunityScoring:
         opp = wishlist_lead_to_opportunity(lead)
         assert opp.opportunity_type == OpportunityType.WISHLIST_LEAD
         assert opp.urgency_score >= 80
+        from src.models import DataMode
+        assert opp.data_mode == DataMode.OPT_IN
 
     def test_urgency_map(self):
         assert urgency_from_label("alta") == 90
