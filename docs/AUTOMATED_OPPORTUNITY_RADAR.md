@@ -49,6 +49,41 @@ Alternativas: `google` (com `GOOGLE_SEARCH_API_KEY` + `GOOGLE_SEARCH_ENGINE_ID`)
 
 ---
 
+## TCG Knowledge Layer
+
+Camada de conhecimento do mercado Pokémon TCG Brasil (`src/tcg_knowledge.py`). Extensível por YAML em `config/`:
+
+| Arquivo | Conteúdo |
+|---------|----------|
+| `tcg_vocabulary.yml` | Termos core, tipos de carta, idiomas |
+| `collection_aliases.yml` | Coleções e aliases (151, SV, Prismatic, Mega Evolution…) |
+| `rarity_terms.yml` | SAR, SIR, FA, Holo, etc. |
+| `condition_terms.yml` | NM, LP, sleeve, whitening… |
+| `grading_terms.yml` | PSA, CGC, BGS, nota 10… |
+| `market_jargon.yml` | Jargão de compra, venda e colecionador |
+| `negative_terms.yml` | Contextos bloqueados (GO, TCG Pocket, dicionário…) |
+| `query_templates.yml` | Queries enriquecidas por modo (light/deep/buyer/seller) |
+
+### Comandos
+
+```bash
+python3 -m src.main vocab-summary
+python3 -m src.main expand-queries --card Charizard --mode light --buyer-only
+python3 -m src.main classify-text "Procuro Charizard 151 português NM, pago à vista"
+```
+
+### O que a camada melhora
+
+1. **Queries** — combina carta + intenção + coleção + idioma + raridade + jargão
+2. **Classificação** — detecta coleção, condição, grading, idioma no snippet
+3. **Filtros strict** — exige sinal qualificador (intenção, coleção, raridade, condição, grading ou marketplace)
+4. **why_saved** — explicação enriquecida: *"Salvo porque menciona Charizard + Pokémon TCG + intenção de compra + português."*
+5. **Campos em opportunities** — `collection_detected`, `rarity_detected`, `condition_detected`, `grading_detected`, `language_detected`, `market_jargon_detected`
+
+TCG Pocket é bloqueado por padrão (foco em carta física). Futuro: `ENABLE_TCG_POCKET=true` no `.env`.
+
+---
+
 ## Fontes PENDING_ACCESS (futuro)
 
 Sem acesso autorizado no MVP — marcadas como `PENDING_ACCESS`:

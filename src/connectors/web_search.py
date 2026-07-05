@@ -16,6 +16,7 @@ from src.opportunity_db import save_rejected_result
 from src.opportunity_models import Opportunity
 from src.opportunity_quality import QualityFilterConfig, evaluate_hit
 from src.opportunity_scoring import score_opportunity
+from src.tcg_knowledge import enrich_opportunity, generate_enriched_queries
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +137,30 @@ class WebSearchConnector:
             return bool(os.getenv("SERPAPI_KEY", "").strip())
         return False
 
-    def templates_for_mode(self, mode: ScanMode) -> list[str]:
-        if mode == ScanMode.DEEP:
-            return list(DEEP_QUERY_TEMPLATES)
-        return list(LIGHT_QUERY_TEMPLATES)
+    def templates_for_mode(
+        self,
+        mode: ScanMode,
+        buyer_only: bool = False,
+        seller_only: bool = False,
+    ) -> list[str]:
+        """Templates com placeholder {card} — use get_queries_for_card para expandir."""
+        return generate_enriched_queries(
+            "{card}",
+            mode.value,
+            buyer_only=buyer_only,
+            seller_only=seller_only,
+        )
+
+    def get_queries_for_card(
+        self,
+        card: str,
+        mode: ScanMode,
+        buyer_only: bool = False,
+        seller_only: bool = False,
+    ) -> list[str]:
+        return generate_enriched_queries(
+            card, mode.value, buyer_only=buyer_only, seller_only=seller_only
+        )
 
     def _provider_request(
         self,
@@ -291,11 +312,15 @@ class WebSearchConnector:
         if not self.is_configured():
             return scan
 
-        templates = self.templates_for_mode(mode)
         planned: list[tuple[str, str]] = []
         for card in cards:
-            for template in templates:
-                planned.append((card, template.format(card=card)))
+            for query in self.get_queries_for_card(
+                card,
+                mode,
+                buyer_only=qcfg.buyer_only,
+                seller_only=qcfg.seller_only,
+            ):
+                planned.append((card, query))
 
         cap = max_queries if max_queries is not None else self.config.max_queries_per_run
         if cap > 0:
@@ -340,6 +365,7 @@ class WebSearchConnector:
                     url=hit.url,
                     urgency_hint=55,
                 )
+                opp = enrich_opportunity(opp, evidence)
                 evaluation = evaluate_hit(
                     hit.title, hit.snippet, hit.url, card, opp, qcfg
                 )
@@ -352,6 +378,7 @@ class WebSearchConnector:
 
                 opp.data_mode = DataMode.LIVE
                 opp.why_saved = evaluation.why_saved
+                enrich_opportunity(opp, evidence)
                 if evaluation.refined_type:
                     opp.opportunity_type = evaluation.refined_type
                     from src.opportunity_scoring import recommended_action_for

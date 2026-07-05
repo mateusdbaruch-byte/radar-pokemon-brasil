@@ -58,6 +58,13 @@ class Opportunity(BaseModel):
     raw_data_json: str = "{}"
     recommended_action: str = ""
     why_saved: str = ""
+    collection_detected: str = ""
+    rarity_detected: str = ""
+    condition_detected: str = ""
+    grading_detected: str = ""
+    language_detected: str = ""
+    market_jargon_detected: str = ""
+    negative_context_detected: str = ""
 
     def to_db_row(self) -> dict[str, Any]:
         return {
@@ -82,6 +89,13 @@ class Opportunity(BaseModel):
             "raw_data_json": self.raw_data_json,
             "recommended_action": self.recommended_action,
             "why_saved": self.why_saved,
+            "collection_detected": self.collection_detected,
+            "rarity_detected": self.rarity_detected,
+            "condition_detected": self.condition_detected,
+            "grading_detected": self.grading_detected,
+            "language_detected": self.language_detected,
+            "market_jargon_detected": self.market_jargon_detected,
+            "negative_context_detected": self.negative_context_detected,
         }
 
     @classmethod
@@ -113,6 +127,13 @@ class Opportunity(BaseModel):
             raw_data_json=row.get("raw_data_json") or "{}",
             recommended_action=row.get("recommended_action") or "",
             why_saved=row.get("why_saved") or "",
+            collection_detected=row.get("collection_detected") or "",
+            rarity_detected=row.get("rarity_detected") or "",
+            condition_detected=row.get("condition_detected") or "",
+            grading_detected=row.get("grading_detected") or "",
+            language_detected=row.get("language_detected") or "",
+            market_jargon_detected=row.get("market_jargon_detected") or "",
+            negative_context_detected=row.get("negative_context_detected") or "",
         )
 
     def set_raw_data(self, data: Any) -> None:

@@ -1,0 +1,38 @@
+# Templates enriquecidos — placeholders: {card}
+light:
+  - 'procuro {card} Pokémon TCG português'
+  - 'compro {card} Copag'
+  - '"alguém vende" {card} Pokémon TCG'
+  - 'vendo {card} Pokémon TCG NM'
+
+deep:
+  - 'procuro {card} Pokémon TCG português'
+  - 'compro {card} Copag'
+  - '{card} 151 português'
+  - '{card} abaixo da Liga'
+  - '{card} MYP Cards'
+  - '{card} LigaPokemon'
+  - 'vendo {card} Pokémon TCG NM'
+  - 'desapego {card} Pokémon TCG'
+  - 'fechando coleção 151 falta {card}'
+  - '{card} SAR português'
+  - '{card} PSA 10'
+  - 'pago {card} Pokémon'
+  - '"quero comprar" {card} "Pokémon TCG"'
+
+buyer_only:
+  - 'procuro {card} Pokémon TCG português'
+  - 'compro {card} Copag'
+  - '"alguém vende" {card} Pokémon'
+  - 'pago {card} Pokémon TCG'
+  - 'fechando coleção 151 falta {card}'
+  - '{card} SAR português'
+  - 'quero comprar {card} NM'
+
+seller_only:
+  - 'vendo {card} Pokémon TCG'
+  - 'desapego {card} Pokémon TCG'
+  - '{card} abaixo da Liga'
+  - 'vendo {card} Copag NM'
+  - '{card} PSA 10 vendo'
+  - 'preciso fazer caixa {card} Pokémon'

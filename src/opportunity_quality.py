@@ -11,6 +11,12 @@ import yaml
 
 from src.opportunity_models import Opportunity, OpportunityType
 from src.paths import CONFIG_DIR
+from src.tcg_knowledge import (
+    analyze_text,
+    build_why_saved_from_signals,
+    has_tcg_context as kb_has_tcg_context,
+    is_negative_context as kb_is_negative_context,
+)
 
 BLOCKED_DOMAINS_PATH = CONFIG_DIR / "blocked_domains.yml"
 PRIORITY_DOMAINS_PATH = CONFIG_DIR / "priority_domains.yml"
@@ -272,12 +278,22 @@ def evaluate_hit(
 ) -> QualityEvaluation:
     text = f"{title} {snippet}".strip()
     domain = extract_domain(url)
+    signals = analyze_text(text)
     pokemon_ok, pokemon_terms = has_pokemon_context(text)
+    if signals.has_tcg_context:
+        pokemon_ok = True
     intent_ok, intent_terms = has_clear_intent(text)
+    if signals.has_buy_intent or signals.has_sell_intent:
+        intent_ok = True
+        intent_terms = signals.buyer_jargon + signals.seller_jargon
     card_ok = mentions_card(text, card_name)
 
     if is_blocked_domain(url):
         return QualityEvaluation(False, f"domínio bloqueado: {domain}", domain=domain)
+
+    if signals.negative_context:
+        terms = ", ".join(signals.negative_context[:3])
+        return QualityEvaluation(False, f"contexto negativo TCG: {terms}", domain=domain)
 
     if is_generic_content(text, url):
         return QualityEvaluation(False, "conteúdo genérico (dicionário/notícia/música)", domain=domain)
@@ -285,10 +301,10 @@ def evaluate_hit(
     if not card_ok:
         return QualityEvaluation(False, f"não menciona a carta monitorada ({card_name})", domain=domain)
 
-    if intent_ok and not pokemon_ok:
+    if intent_ok and not pokemon_ok and not kb_has_tcg_context(text):
         return QualityEvaluation(False, "intenção sem contexto Pokémon/TCG/carta", domain=domain)
 
-    if not pokemon_ok and not is_priority_domain(url):
+    if not pokemon_ok and not kb_has_tcg_context(text) and not is_priority_domain(url):
         return QualityEvaluation(False, "sem contexto Pokémon/TCG e fonte não priorizada", domain=domain)
 
     if is_social_domain(url) and not social_has_relevant_evidence(text, card_name):
@@ -298,11 +314,16 @@ def evaluate_hit(
             domain=domain,
         )
 
-    relevant_source = intent_ok or is_priority_domain(url)
-    if config.strict and not relevant_source:
+    marketplace = is_priority_domain(url)
+    qualifying = (
+        signals.has_qualifying_signal()
+        or marketplace
+        or intent_ok
+    )
+    if config.strict and not qualifying:
         return QualityEvaluation(
             False,
-            "modo strict: sem intenção clara nem fonte marketplace/comunidade",
+            "modo strict: sem intenção/coleção/raridade/condição/grading/fonte relevante",
             domain=domain,
         )
 
@@ -314,6 +335,13 @@ def evaluate_hit(
         )
 
     refined = classify_refined_type(opp, text, domain)
+    if signals.has_sell_intent and refined == OpportunityType.MARKETPLACE_LISTING:
+        refined = OpportunityType.SELLER_SUPPLY
+    if signals.has_buy_intent and refined in (
+        OpportunityType.DISCUSSION,
+        OpportunityType.WEB_SIGNAL,
+    ):
+        refined = OpportunityType.BUYER_DEMAND
 
     if config.buyer_only and refined not in BUYER_ONLY_TYPES:
         return QualityEvaluation(
@@ -323,14 +351,19 @@ def evaluate_hit(
         )
 
     if config.seller_only and refined not in SELLER_ONLY_TYPES:
-        return QualityEvaluation(
-            False,
-            f"seller-only: tipo {refined.value} não é oferta de venda",
-            domain=domain,
-        )
+        if marketplace and (signals.has_sell_intent or "carta" in text.lower()):
+            refined = OpportunityType.SELLER_SUPPLY
+        else:
+            return QualityEvaluation(
+                False,
+                f"seller-only: tipo {refined.value} não é oferta de venda",
+                domain=domain,
+            )
 
     if config.buyer_only and refined == OpportunityType.DISCUSSION_SIGNAL:
-        strong = any(t in text.lower() for t in ("procuro", "compro", "wtb", "looking for", "quero comprar"))
+        strong = signals.has_buy_intent or any(
+            t in text.lower() for t in ("procuro", "compro", "wtb", "looking for", "quero comprar")
+        )
         if not strong:
             return QualityEvaluation(
                 False,
@@ -338,7 +371,9 @@ def evaluate_hit(
                 domain=domain,
             )
 
-    why = build_why_saved(card_name, pokemon_terms, intent_terms, domain, refined)
+    why = build_why_saved_from_signals(
+        card_name, signals, domain=domain, marketplace=marketplace
+    )
     return QualityEvaluation(
         True,
         why_saved=why,

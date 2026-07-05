@@ -58,7 +58,12 @@ def _scan_web_search(
     if not connector.is_configured():
         return [], None
 
-    templates = connector.templates_for_mode(mode)
+    templates = connector.get_queries_for_card(
+        cards[0] if cards else "Card",
+        mode,
+        buyer_only=quality_config.buyer_only if quality_config else False,
+        seller_only=quality_config.seller_only if quality_config else False,
+    )
     per_query = max(1, limit // max(len(templates), 1))
     scan = connector.scan_cards(
         cards,

@@ -16,6 +16,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 from src.connectors.web_search import ScanMode, WebSearchConnector, WebSearchQueryResult
+from src.tcg_knowledge import (
+    classify_text,
+    generate_enriched_queries,
+    vocab_summary_counts,
+)
 from src.connector_health import (
     ConnectorDataMode,
     HealthCheckResult,
@@ -481,6 +486,85 @@ def _print_scan_summary(
     console.print(
         f"  URLs deduplicadas (DB): {dedup_db + result.urls_deduplicated_in_scan}"
     )
+
+
+@app.command("vocab-summary")
+def vocab_summary_cmd() -> None:
+    """Resumo do vocabulário TCG carregado dos YAMLs."""
+    counts = vocab_summary_counts()
+    console.print("[bold blue]📚 TCG Knowledge Layer — vocabulário[/bold blue]\n")
+    table = Table(show_lines=True)
+    table.add_column("Categoria")
+    table.add_column("Quantidade", justify="right")
+    rows = [
+        ("Coleções cadastradas", counts["collections"]),
+        ("Aliases de coleção", counts["aliases"]),
+        ("Termos core TCG", counts["core_terms"]),
+        ("Termos de raridade", counts["rarity"]),
+        ("Termos de condição", counts["condition"]),
+        ("Termos de grading", counts["grading"]),
+        ("Jargão de compra", counts["buyer_jargon"]),
+        ("Jargão de venda", counts["seller_jargon"]),
+        ("Jargão de colecionador", counts["collector_jargon"]),
+        ("Termos negativos", counts["negative"]),
+    ]
+    for label, count in rows:
+        table.add_row(label, str(count))
+    console.print(table)
+    console.print("\n[dim]Configs: config/tcg_vocabulary.yml, collection_aliases.yml, ...[/dim]")
+
+
+@app.command("expand-queries")
+def expand_queries_cmd(
+    card: str = typer.Option(..., "--card", "-c"),
+    mode: ScanMode = typer.Option(ScanMode.LIGHT, "--mode", "-m"),
+    buyer_only: bool = typer.Option(False, "--buyer-only"),
+    seller_only: bool = typer.Option(False, "--seller-only"),
+) -> None:
+    """Mostra queries enriquecidas que serão usadas no scan."""
+    if buyer_only and seller_only:
+        console.print("[red]Use apenas um: --buyer-only ou --seller-only[/red]")
+        raise typer.Exit(1)
+    queries = generate_enriched_queries(
+        card.strip(),
+        mode.value,
+        buyer_only=buyer_only,
+        seller_only=seller_only,
+    )
+    console.print(f"[bold blue]🔎 Queries enriquecidas — {card}[/bold blue]\n")
+    console.print(f"[dim]Modo: {mode.value} | total: {len(queries)}[/dim]\n")
+    for i, q in enumerate(queries, 1):
+        console.print(f"  {i}. {q}")
+
+
+@app.command("classify-text")
+def classify_text_cmd(
+    text: str = typer.Argument(..., help="Texto para classificar"),
+    card: str = typer.Option("", "--card", help="Dica de carta (opcional)"),
+) -> None:
+    """Classifica texto livre com a TCG Knowledge Layer."""
+    result = classify_text(text, card_hint=card.strip())
+    s = result.signals
+    console.print("[bold blue]🧠 Classificação TCG[/bold blue]\n")
+    console.print(f"[bold]Texto:[/bold] {text}\n")
+    table = Table(show_lines=True)
+    table.add_column("Campo")
+    table.add_column("Valor")
+    table.add_row("Carta detectada", result.card_detected or "—")
+    table.add_row("Coleção", s.collection or "—")
+    table.add_row("Idioma", ", ".join(s.language) or "—")
+    table.add_row("Condição", ", ".join(s.condition) or "—")
+    table.add_row("Raridade", ", ".join(s.rarity) or "—")
+    table.add_row("Grading", ", ".join(s.grading) or "—")
+    table.add_row("Intenção compra", ", ".join(s.buyer_jargon) or "—")
+    table.add_row("Intenção venda", ", ".join(s.seller_jargon) or "—")
+    table.add_row("Contexto negativo", ", ".join(s.negative_context) or "—")
+    table.add_row("Tipo oportunidade", result.opportunity_type)
+    table.add_row("Intent score", str(result.intent_score))
+    table.add_row("Opportunity score", str(result.opportunity_score))
+    table.add_row("Confidence", str(result.confidence_score))
+    table.add_row("Oportunidade provável", result.probable_opportunity)
+    console.print(table)
 
 
 @app.command("rejected-report")

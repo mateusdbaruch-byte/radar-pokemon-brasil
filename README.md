@@ -13,6 +13,21 @@ Detecta compradores potenciais, sinais públicos na web e leads opt-in — dentr
 python3 -m src.main web-search-test --query "procuro Charizard Pokémon TCG" --limit 5
 ```
 
+### Scan com precisão (TCG Knowledge Layer + strict)
+
+```bash
+python3 -m src.main vocab-summary
+python3 -m src.main expand-queries --card Charizard --mode light --buyer-only
+python3 -m src.main classify-text "Procuro Charizard 151 português NM, pago à vista"
+python3 -m src.main reset-db --force
+python3 -m src.main scan-opportunities --card Charizard --sources web_search --mode light --strict --buyer-only --limit 5
+python3 -m src.main opportunity-inbox
+python3 -m src.main quality-report
+```
+
+A **TCG Knowledge Layer** (`src/tcg_knowledge.py`) carrega vocabulário extensível via YAML:
+`config/tcg_vocabulary.yml`, `collection_aliases.yml`, `rarity_terms.yml`, `condition_terms.yml`, `grading_terms.yml`, `market_jargon.yml`, `negative_terms.yml`, `query_templates.yml`.
+
 ### Scan com precisão (strict + buyer-only)
 
 ```bash
@@ -388,7 +403,9 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 | `python3 -m src.main scan-opportunities --strict` | Filtro rigoroso (confidence >= 65) |
 | `python3 -m src.main scan-opportunities --buyer-only` | Apenas demanda de compra |
 | `python3 -m src.main scan-opportunities --seller-only` | Apenas ofertas de venda |
-| `python3 -m src.main rejected-report` | Resultados filtrados/rejeitados |
+| `python3 -m src.main vocab-summary` | Resumo do vocabulário TCG carregado |
+| `python3 -m src.main expand-queries --card Charizard` | Preview das queries enriquecidas |
+| `python3 -m src.main classify-text "..."` | Classifica texto com TCG Knowledge Layer |
 | `python3 -m src.main web-search-test` | Testa uma query web_search |
 | `python3 -m src.main opportunity-inbox` | Caixa de entrada de oportunidades |
 | `python3 -m src.main opportunity-report` | Relatório consolidado |

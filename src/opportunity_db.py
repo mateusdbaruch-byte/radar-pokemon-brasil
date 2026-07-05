@@ -37,7 +37,14 @@ CREATE TABLE IF NOT EXISTS opportunities (
     collected_at TEXT NOT NULL,
     raw_data_json TEXT,
     recommended_action TEXT,
-    why_saved TEXT DEFAULT ''
+    why_saved TEXT DEFAULT '',
+    collection_detected TEXT DEFAULT '',
+    rarity_detected TEXT DEFAULT '',
+    condition_detected TEXT DEFAULT '',
+    grading_detected TEXT DEFAULT '',
+    language_detected TEXT DEFAULT '',
+    market_jargon_detected TEXT DEFAULT '',
+    negative_context_detected TEXT DEFAULT ''
 );
 """
 
@@ -92,8 +99,19 @@ class SaveOpportunitiesResult:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(opportunities)")}
-    if "why_saved" not in cols:
-        conn.execute("ALTER TABLE opportunities ADD COLUMN why_saved TEXT DEFAULT ''")
+    new_cols = {
+        "why_saved": "TEXT DEFAULT ''",
+        "collection_detected": "TEXT DEFAULT ''",
+        "rarity_detected": "TEXT DEFAULT ''",
+        "condition_detected": "TEXT DEFAULT ''",
+        "grading_detected": "TEXT DEFAULT ''",
+        "language_detected": "TEXT DEFAULT ''",
+        "market_jargon_detected": "TEXT DEFAULT ''",
+        "negative_context_detected": "TEXT DEFAULT ''",
+    }
+    for col, typedef in new_cols.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE opportunities ADD COLUMN {col} {typedef}")
 
 
 def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
