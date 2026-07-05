@@ -1,123 +1,193 @@
 # Radar Pokémon Brasil 🇧🇷
 
-MVP de inteligência de demanda para cartas **Pokémon TCG** no Brasil.  
-Coleta sinais públicos de compra/venda em fontes acessíveis e classifica a intenção de cada menção.
+Ferramenta de **inteligência de mercado** para cartas Pokémon TCG no Brasil.  
+Coleta sinais públicos de compra e venda, calcula preços e gera recomendações simples por carta.
 
 ---
 
 ## O que este projeto faz?
 
-1. Monitora uma lista de cartas Pokémon (ex.: Charizard, Umbreon, Pikachu…)
-2. Busca menções em fontes públicas (Reddit, Mercado Livre, etc.)
-3. Classifica se há intenção de **compra**, **venda**, **referência de preço** ou **discussão**
-4. Atribui um **score de 0 a 100** para priorizar os melhores sinais
-5. Salva tudo em **SQLite** e **CSV**
-6. Mostra um relatório colorido no terminal
+1. Monitora cartas Pokémon (Charizard, Umbreon, Pikachu…)
+2. Busca menções em fontes públicas (Reddit, Mercado Livre…)
+3. Classifica intenção de compra ou venda
+4. Calcula **preço mínimo, máximo e médio** por carta
+5. Gera recomendação: *boa demanda*, *muita oferta*, *possível oportunidade*, etc.
+6. Salva em SQLite e CSV
 
-> **Importante:** Este MVP **não** envia mensagens, **não** faz login automático em redes sociais e **não** acessa grupos privados. Apenas coleta informações públicas para análise manual.
-
----
-
-## Requisitos
-
-- **Python 3.11 ou superior** — [baixar em python.org](https://www.python.org/downloads/)
-- Conexão com a internet
-- (Opcional) Chave da API do YouTube para habilitar comentários
+> Este MVP **não** envia mensagens nem acessa grupos privados. Apenas coleta dados públicos.
 
 ---
 
-## Instalação passo a passo
+## Guia rápido (copie e cole)
 
-### 1. Baixar o projeto
-
-Se você recebeu o código em uma pasta, abra o terminal nessa pasta.  
-Exemplo no Linux/Mac:
+Se você já tem Python instalado, siga estes 5 passos na pasta do projeto:
 
 ```bash
-cd radar-pokemon-brasil
+# 1. Criar ambiente virtual
+python3 -m venv .venv
+
+# 2. Ativar (Linux/Mac)
+source .venv/bin/activate
+
+# 3. Instalar
+pip install -r requirements.txt
+
+# 4. Primeira busca de teste (funciona sem internet)
+python3 -m src search --mock --limit 5
+
+# 5. Ver relatório de mercado
+python3 -m src report
 ```
 
-No Windows, abra o **Prompt de Comando** ou **PowerShell** e navegue até a pasta.
+No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.venv\Scripts\activate`.
 
-### 2. Criar ambiente virtual (recomendado)
+**Atalho ainda mais fácil** (sem digitar `python3 -m src`):
+
+| Sistema | Comando |
+|---------|---------|
+| Linux/Mac | `./radar.sh search --mock --limit 5` |
+| Windows | `radar.bat search --mock --limit 5` |
+
+---
+
+## Instalação detalhada (passo a passo para iniciantes)
+
+### Passo 0 — Instalar o Python
+
+1. Acesse [python.org/downloads](https://www.python.org/downloads/)
+2. Baixe a versão **3.11 ou superior**
+3. Durante a instalação no Windows, **marque** a opção **"Add Python to PATH"**
+4. Confirme no terminal:
+   ```bash
+   python3 --version
+   ```
+   Deve aparecer algo como `Python 3.11.x` ou `Python 3.12.x`
+
+   > **Windows:** se `python3` não funcionar, tente `py -3 --version`
+
+### Passo 1 — Abrir o terminal na pasta do projeto
+
+- **Windows:** clique com botão direito na pasta → "Abrir no Terminal" (ou PowerShell)
+- **Mac:** Terminal → `cd` até a pasta do projeto
+- **Linux:** Terminal → `cd radar-pokemon-brasil`
+
+### Passo 2 — Criar ambiente virtual
+
+Um "ambiente virtual" isola as dependências do projeto. Rode **uma vez**:
 
 ```bash
 python3 -m venv .venv
 ```
 
-Ativar o ambiente:
+Windows (se `python3` falhar):
 
-- **Linux/Mac:**
-  ```bash
-  source .venv/bin/activate
-  ```
-- **Windows:**
-  ```bash
-  .venv\Scripts\activate
-  ```
+```bash
+py -3 -m venv .venv
+```
 
-### 3. Instalar dependências
+### Passo 3 — Ativar o ambiente virtual
+
+**Linux/Mac:**
+```bash
+source .venv/bin/activate
+```
+
+**Windows (Prompt de Comando):**
+```bash
+.venv\Scripts\activate
+```
+
+**Windows (PowerShell):**
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Quando ativado, o terminal mostra `(.venv)` no início da linha.
+
+### Passo 4 — Instalar dependências
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configurar variáveis de ambiente (opcional)
+### Passo 5 — (Opcional) Configurar variáveis de ambiente
 
 ```bash
 cp .env.example .env
 ```
 
-Edite o arquivo `.env` se quiser personalizar o User-Agent do Reddit ou adicionar chave do YouTube.
+Edite `.env` apenas se quiser personalizar o Reddit ou habilitar YouTube.
 
 ---
 
 ## Como usar
 
-### Buscar sinais de demanda
+### Buscar sinais
 
 ```bash
-python -m src.main search --cards config/cards.yml --limit 20
+python3 -m src search --mock --limit 5     # teste offline (recomendado na 1ª vez)
+python3 -m src search --limit 20           # busca real (Reddit + Mercado Livre)
 ```
 
-Isso vai:
-- Ler as cartas de `config/cards.yml`
-- Buscar no **Reddit** e **Mercado Livre**
-- Classificar cada resultado
-- Salvar em `data/radar.db` e `data/radar_results.csv`
-- Mostrar uma tabela com os melhores resultados
+Ou com atalho:
+```bash
+./radar.sh search --mock --limit 5          # Linux/Mac
+radar.bat search --mock --limit 5         # Windows
+```
 
-**Opções úteis:**
-
-| Opção | Descrição |
-|-------|-----------|
-| `--limit 20` | Máximo de resultados por carta por fonte |
-| `--mock` | Usar dados simulados (sem internet) |
-| `--fallback-mock` | Se APIs falharem, usar mock automaticamente (padrão: ligado) |
-| `--no-fallback-mock` | Desligar fallback automático para mock |
-| `--sources config/sources.yml` | Arquivo de fontes |
-
-**Exemplo com dados simulados (teste offline):**
+### Ver relatório de inteligência de mercado
 
 ```bash
-python -m src.main search --mock --limit 5
+python3 -m src report
 ```
 
-### Ver relatório
+O relatório mostra **por carta**:
 
-```bash
-python -m src.main report
-```
+| Métrica | Descrição |
+|---------|-----------|
+| Preço mín./máx./méd. | Com base nos anúncios com preço |
+| Anúncios | Quantidade de listagens encontradas |
+| Compra / Venda | Sinais de intenção de compra e venda |
+| Demanda | Score médio dos sinais de compra (0–100) |
+| Fonte | Principal origem dos dados |
+| Recomendação | Ver tabela abaixo |
 
-Mostra estatísticas e os melhores resultados já salvos.
+**Recomendações possíveis:**
+
+| Recomendação | Significado |
+|--------------|-------------|
+| `boa demanda` | Vários compradores, pouca oferta relativa |
+| `possível oportunidade` | Demanda e oferta coexistem |
+| `muita oferta` | Muitos anúncios, pouca demanda |
+| `observar` | Dados insuficientes para concluir |
+| `dados insuficientes` | Poucos sinais coletados |
 
 ### Exportar CSV
 
 ```bash
-python -m src.main export
+python3 -m src export
 ```
 
-Gera/atualiza `data/radar_results.csv` a partir do banco SQLite.
+Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
+
+---
+
+## Comandos disponíveis
+
+| Comando | O que faz |
+|---------|-----------|
+| `python3 -m src search` | Busca sinais nas fontes configuradas |
+| `python3 -m src report` | Relatório de inteligência de mercado |
+| `python3 -m src export` | Exporta CSV |
+| `python3 -m src --help` | Lista todas as opções |
+
+**Opções do search:**
+
+| Opção | Descrição |
+|-------|-----------|
+| `--mock` | Dados simulados (sem internet) |
+| `--limit 20` | Máximo por carta por fonte |
+| `--no-fallback-mock` | Não usar mock se APIs falharem |
 
 ---
 
@@ -125,140 +195,60 @@ Gera/atualiza `data/radar_results.csv` a partir do banco SQLite.
 
 ```
 radar-pokemon-brasil/
+├── radar.sh / radar.bat    # Atalhos para rodar sem digitar python
 ├── README.md
-├── .env.example
 ├── requirements.txt
+├── pyproject.toml
 ├── config/
-│   ├── cards.yml          # Cartas monitoradas
-│   ├── keywords.yml       # Palavras-chave de intenção
-│   └── sources.yml        # Fontes habilitadas
+│   ├── cards.yml           # Cartas monitoradas
+│   ├── keywords.yml        # Palavras-chave PT/EN
+│   └── sources.yml         # Fontes habilitadas
 ├── src/
-│   ├── main.py            # CLI principal
-│   ├── models.py          # Modelos de dados
-│   ├── database.py        # SQLite
-│   ├── scoring.py         # Classificação e score
-│   ├── normalizer.py      # Normalização de nomes
-│   ├── exporters.py       # Exportação CSV
-│   └── connectors/
-│       ├── reddit.py
-│       ├── mercado_livre.py
-│       ├── youtube.py
-│       └── discord_placeholder.py
+│   ├── main.py             # CLI
+│   ├── market_intelligence.py  # Análise por carta
+│   ├── scoring.py          # Classificação de intenção
+│   └── connectors/         # Reddit, Mercado Livre, etc.
 ├── data/
-│   ├── radar_results.csv
-│   └── radar.db
-├── docs/
-│   └── future_connectors_meta.md  # Facebook/Instagram (futuro)
+│   ├── radar.db            # Banco (gerado automaticamente)
+│   └── radar_results.csv   # Exportação CSV
 └── tests/
-    ├── test_scoring.py
-    └── test_normalizer.py
 ```
 
 ---
 
 ## Fontes de dados
 
-| Fonte | Status | Autenticação |
-|-------|--------|--------------|
-| **Reddit** | ✅ Ativo | User-Agent no `.env` (sem login) |
-| **Mercado Livre** | ✅ Ativo | API pública, sem chave |
-| **YouTube** | ⚙️ Opcional | `YOUTUBE_API_KEY` no `.env` |
-| **Discord** | 📋 Placeholder | Importação manual futura |
-| **Facebook/Instagram** | ❌ Futuro | Ver `docs/future_connectors_meta.md` |
+| Fonte | Status | Precisa de chave? |
+|-------|--------|-------------------|
+| Reddit | ✅ Ativo | Não (User-Agent opcional no `.env`) |
+| Mercado Livre | ✅ Ativo | Não |
+| YouTube | ⚙️ Opcional | Sim (`YOUTUBE_API_KEY`) |
+| Discord | 📋 Futuro | Importação manual |
+| Facebook/Instagram | ❌ Futuro | Ver `docs/future_connectors_meta.md` |
 
-### Reddit
-
-Usa o endpoint JSON público (`reddit.com/search.json`).  
-Se receber bloqueio (HTTP 429), aguarde alguns minutos ou use `--mock`.
-
-Configure um User-Agent descritivo em `.env`:
-
-```
-REDDIT_USER_AGENT=RadarPokemonBrasil/1.0 (seu@email.com)
-```
-
-### Mercado Livre
-
-Usa a [API pública de busca](https://developers.mercadolivre.com.br/pt_br/itens-e-buscas) do site MLB (Brasil).  
-Não exige cadastro para buscas básicas.
-
-### YouTube
-
-Para habilitar, edite `config/sources.yml`:
-
-```yaml
-youtube:
-  enabled: true
-```
-
-E adicione sua chave em `.env`:
-
-```
-YOUTUBE_API_KEY=sua_chave_aqui
-```
-
-Obtenha a chave em [Google Cloud Console](https://console.cloud.google.com/) → YouTube Data API v3.
+> **Nota:** APIs podem bloquear IPs de datacenter. Em casa costuma funcionar melhor. Se falhar, use `--mock` ou deixe o fallback automático ligado (padrão).
 
 ---
 
-## Classificação de intenção
-
-| Tipo | Significado |
-|------|-------------|
-| `BUY_INTENT` | Provável comprador |
-| `SELL_INTENT` | Provável vendedor |
-| `PRICE_REFERENCE` | Anúncio/referência de preço |
-| `DISCUSSION` | Conversa sem intenção clara |
-| `UNKNOWN` | Incerto |
-
-### Score (0–100)
-
-| Faixa | Significado |
-|-------|-------------|
-| 90–100 | Compra explícita ("compro", "procuro", "WTB") |
-| 70–89 | Compra provável ("alguém tem?", "onde acho?") |
-| 40–69 | Menção relevante sem compra clara |
-| 0–39 | Ruído ou discussão genérica |
-
----
-
-## Personalizar cartas e palavras-chave
+## Personalizar
 
 **Cartas** — edite `config/cards.yml`:
-
 ```yaml
 cards:
   - Charizard
   - SuaCartaAqui
 ```
 
-**Palavras-chave** — edite `config/keywords.yml` (compra/venda em PT e EN).
-
-**Fontes** — edite `config/sources.yml` para habilitar/desabilitar conectores.
+**Palavras-chave** — `config/keywords.yml`  
+**Fontes** — `config/sources.yml`
 
 ---
 
 ## Testes
 
 ```bash
-pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
-
----
-
-## Conformidade e segurança
-
-Este projeto segue estas regras:
-
-- ✅ Apenas dados **públicos**
-- ✅ APIs **oficiais** quando disponíveis
-- ✅ Links salvos para **análise manual**
-- ❌ Sem login automático em Facebook, Instagram, WhatsApp
-- ❌ Sem scraping de grupos/servidores **privados**
-- ❌ Sem envio automático de mensagens
-- ❌ Sem burlar captcha, paywall ou autenticação
-
-Leia mais sobre Facebook/Instagram em [`docs/future_connectors_meta.md`](docs/future_connectors_meta.md).
 
 ---
 
@@ -266,14 +256,25 @@ Leia mais sobre Facebook/Instagram em [`docs/future_connectors_meta.md`](docs/fu
 
 | Problema | Solução |
 |----------|---------|
-| `ModuleNotFoundError: src` | Execute da pasta raiz do projeto |
-| Reddit sem resultados | IPs de datacenter podem ser bloqueados; use `--mock` ou rode localmente |
-| Mercado Livre 403 | Tente de rede residencial; o fallback mock cobre testes |
-| YouTube não funciona | Normal — precisa de `YOUTUBE_API_KEY` |
-| `pip install` falha | Verifique Python 3.11+ com `python3 --version` |
+| `python3: command not found` | Use `py -3` (Windows) ou instale Python |
+| `ModuleNotFoundError: src` | Execute da **pasta raiz** do projeto |
+| `pip: command not found` | Use `python3 -m pip install -r requirements.txt` |
+| `Permission denied: ./radar.sh` | Rode `chmod +x radar.sh` |
+| Reddit/ML sem resultados | Use `--mock` ou rode de rede residencial |
+| PowerShell bloqueia ativação | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| Banco vazio no report | Execute `search` antes do `report` |
+
+---
+
+## Conformidade
+
+- ✅ Apenas dados públicos via APIs oficiais
+- ❌ Sem login automático em redes sociais
+- ❌ Sem scraping de grupos privados
+- ❌ Sem envio automático de mensagens
 
 ---
 
 ## Licença
 
-Projeto de prova de conceito para validação de mercado. Use com responsabilidade e respeite os termos de cada plataforma.
+Projeto de prova de conceito. Use com responsabilidade e respeite os termos de cada plataforma.

@@ -7,9 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.models import RadarResult
-
-# Caminho padrão do banco
-DEFAULT_DB_PATH = Path("data/radar.db")
+from src.paths import DEFAULT_DB, ensure_data_dir
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS radar_results (
@@ -40,10 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_collected_at ON radar_results(collected_at DESC);
 """
 
 
-def get_connection(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
+def get_connection(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
     """Abre conexão SQLite, criando diretório e tabela se necessário."""
     path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_data_dir()
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript(CREATE_TABLE_SQL + CREATE_INDEX_SQL)
@@ -51,7 +49,7 @@ def get_connection(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def save_result(result: RadarResult, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+def save_result(result: RadarResult, db_path: Path | str = DEFAULT_DB) -> None:
     """Insere ou atualiza um resultado no banco."""
     conn = get_connection(db_path)
     row = result.to_db_row()
@@ -68,7 +66,7 @@ def save_result(result: RadarResult, db_path: Path | str = DEFAULT_DB_PATH) -> N
 
 def save_results(
     results: list[RadarResult],
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str = DEFAULT_DB,
 ) -> int:
     """Salva múltiplos resultados. Retorna quantidade salva."""
     conn = get_connection(db_path)
@@ -89,7 +87,7 @@ def save_results(
 
 
 def fetch_all(
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str = DEFAULT_DB,
     order_by_score: bool = True,
     limit: int | None = None,
 ) -> list[RadarResult]:
@@ -106,7 +104,7 @@ def fetch_all(
 
 def fetch_by_intent(
     intent_type: str,
-    db_path: Path | str = DEFAULT_DB_PATH,
+    db_path: Path | str = DEFAULT_DB,
     limit: int = 50,
 ) -> list[RadarResult]:
     """Filtra resultados por tipo de intenção."""
@@ -124,7 +122,7 @@ def fetch_by_intent(
     return [RadarResult.from_db_row(dict(row)) for row in rows]
 
 
-def count_results(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
+def count_results(db_path: Path | str = DEFAULT_DB) -> dict[str, Any]:
     """Retorna estatísticas resumidas do banco."""
     conn = get_connection(db_path)
     total = conn.execute("SELECT COUNT(*) FROM radar_results").fetchone()[0]
@@ -154,7 +152,7 @@ def count_results(db_path: Path | str = DEFAULT_DB_PATH) -> dict[str, Any]:
     }
 
 
-def clear_results(db_path: Path | str = DEFAULT_DB_PATH) -> None:
+def clear_results(db_path: Path | str = DEFAULT_DB) -> None:
     """Remove todos os resultados (útil para testes)."""
     conn = get_connection(db_path)
     conn.execute("DELETE FROM radar_results")
