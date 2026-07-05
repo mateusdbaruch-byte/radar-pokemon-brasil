@@ -10,7 +10,7 @@ from typing import Any
 
 import requests
 
-from src.models import RadarResult
+from src.models import DataMode, RadarResult, tag_results
 from src.normalizer import build_search_query, normalize_card_name
 from src.scoring import apply_scoring_to_result, extract_price_from_text
 
@@ -191,8 +191,9 @@ def get_mock_results(card_name: str) -> list[RadarResult]:
         },
     ]
     connector = RedditConnector()
-    return [
+    results = [
         r
         for post in mock_posts
         if (r := connector._post_to_result(post, card_name))
     ]
+    return tag_results(results, DataMode.MOCK)

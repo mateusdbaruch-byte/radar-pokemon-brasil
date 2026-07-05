@@ -15,8 +15,9 @@ from src.market_intelligence import (
     analyze_all_cards,
     recommendation_style,
 )
-from src.models import RadarResult
+from src.models import DataMode, RadarResult
 from src.normalizer import normalize_card_name
+from src.database import count_by_data_mode
 
 RECOMMENDATION_PRIORITY: dict[Recommendation, int] = {
     "boa demanda": 4,
@@ -146,6 +147,40 @@ def analyze_card_empty(card_name: str) -> CardMarketInsight:
     return analyze_card(card_name, [])
 
 
+def display_data_mode_summary(console: Console, results: list[RadarResult]) -> None:
+    """Exibe contagem por origem dos dados e aviso se houver mock."""
+    counts = count_by_data_mode(results)
+    live = counts.get(DataMode.LIVE.value, 0)
+    mock = counts.get(DataMode.MOCK.value, 0)
+    manual = counts.get(DataMode.MANUAL_IMPORT.value, 0)
+    total = live + mock + manual
+
+    lines = [
+        f"[bold]Origem dos dados[/bold] ({total} resultados no relatório):",
+        f"  • [green]live[/green] (APIs reais): [bold]{live}[/bold]",
+        f"  • [yellow]mock[/yellow] (simulados): [bold]{mock}[/bold]",
+        f"  • [cyan]manual_import[/cyan] (importação manual): [bold]{manual}[/bold]",
+    ]
+
+    if mock > 0:
+        console.print()
+        console.print(
+            Panel(
+                "[bold red]ATENÇÃO: este relatório contém dados simulados "
+                "e não deve ser usado para decisão de mercado.[/bold red]\n\n"
+                f"Dados simulados (mock): {mock} de {total} resultados.\n"
+                "Para validação real, rode: [bold]python3 -m src.main search --no-mock[/bold] "
+                "e verifique se [bold]live[/bold] > 0.",
+                border_style="red",
+                title="⚠️ DADOS SIMULADOS",
+            )
+        )
+    elif total > 0 and live == total:
+        lines.append("\n[green]✓ Todos os dados são reais (live).[/green]")
+
+    console.print(Panel("\n".join(lines), title="🔖 Modo dos dados", border_style="blue"))
+
+
 def display_executive_summary(console: Console, summary: MarketSummary) -> None:
     """Painel de resumo executivo do mercado."""
     lines = [
@@ -242,8 +277,9 @@ def display_top_signals(console: Console, results: list[RadarResult], top_n: int
     table.add_column("Score", width=6)
     table.add_column("Intenção", width=16)
     table.add_column("Carta", width=12)
-    table.add_column("Fonte", width=14)
-    table.add_column("Trecho", width=44)
+    table.add_column("Fonte", min_width=13)
+    table.add_column("Modo", min_width=8)
+    table.add_column("Trecho", width=36)
 
     for r in sorted_results:
         score_style = (
@@ -251,11 +287,17 @@ def display_top_signals(console: Console, results: list[RadarResult], top_n: int
             else "yellow" if r.intent_score >= 40
             else "dim"
         )
+        mode_style = {
+            DataMode.LIVE.value: "green",
+            DataMode.MOCK.value: "yellow",
+            DataMode.MANUAL_IMPORT.value: "cyan",
+        }.get(r.data_mode.value, "dim")
         table.add_row(
             f"[{score_style}]{r.intent_score}[/{score_style}]",
             r.intent_type.value,
             r.normalized_card_name,
             r.source,
+            f"[{mode_style}]{r.data_mode.value}[/{mode_style}]",
             (r.title or r.text_snippet)[:60],
         )
 
@@ -280,6 +322,8 @@ def display_market_report(
         console.print("[yellow]Nenhum dado para análise de mercado.[/yellow]")
         return
 
+    display_data_mode_summary(console, results)
+    console.print()
     display_executive_summary(console, summary)
     display_highlights(console, summary.highlight_cards)
     display_market_table(console, insights)

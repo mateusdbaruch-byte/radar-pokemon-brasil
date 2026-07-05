@@ -10,13 +10,15 @@ import yaml
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.panel import Panel
 
 from src.connectors.discord_placeholder import DiscordPlaceholderConnector
 from src.connectors.mercado_livre import MercadoLivreConnector, get_mock_results as ml_mock
 from src.connectors.reddit import RedditConnector, get_mock_results as reddit_mock
 from src.connectors.youtube import YouTubeConnector
-from src.database import count_results, fetch_all, save_results
+from src.database import count_by_data_mode, fetch_all, reset_all_data, save_results
 from src.exporters import export_to_csv
+from src.models import DataMode
 from src.paths import DEFAULT_CARDS, DEFAULT_CSV, DEFAULT_DB, DEFAULT_SOURCES, PROJECT_ROOT
 from src.reporting import display_market_report
 
@@ -57,6 +59,22 @@ def load_sources_config(sources_path: Path) -> dict:
     return load_yaml(sources_path).get("sources", {})
 
 
+def _print_source_error(source_name: str, hint: str) -> None:
+    """Mensagem amigável quando uma fonte falha em modo --no-mock."""
+    console.print(
+        Panel(
+            f"[yellow]A fonte [bold]{source_name}[/bold] não retornou dados.[/yellow]\n\n"
+            f"Possíveis causas:\n"
+            f"  • Bloqueio temporário da API (HTTP 403/429)\n"
+            f"  • Problema de conexão com a internet\n"
+            f"  • Configuração incompleta\n\n"
+            f"[dim]{hint}[/dim]",
+            border_style="yellow",
+            title=f"⚠ {source_name}",
+        )
+    )
+
+
 @app.command()
 def search(
     cards: Path = typer.Option(
@@ -80,16 +98,23 @@ def search(
     mock: bool = typer.Option(
         False,
         "--mock",
-        help="Usar dados simulados (útil para testes offline).",
+        help="Usar apenas dados simulados (data_mode=mock).",
     ),
-    fallback_mock: bool = typer.Option(
-        True,
-        "--fallback-mock/--no-fallback-mock",
-        help="Se APIs falharem, usar dados simulados automaticamente.",
+    no_mock: bool = typer.Option(
+        False,
+        "--no-mock",
+        help="Apenas dados reais; sem fallback simulado se APIs falharem.",
     ),
 ) -> None:
     """Executa busca nas fontes públicas configuradas."""
-    console.print("[bold blue]🔍 Radar Pokémon Brasil — Iniciando busca...[/bold blue]\n")
+    if mock and no_mock:
+        console.print("[red]Use apenas --mock OU --no-mock, não ambos.[/red]")
+        raise typer.Exit(1)
+
+    mode_label = "mock" if mock else "live (sem fallback)" if no_mock else "live"
+    console.print(
+        f"[bold blue]🔍 Radar Pokémon Brasil — Iniciando busca ({mode_label})...[/bold blue]\n"
+    )
 
     card_list = load_cards(cards)
     if not card_list:
@@ -97,7 +122,8 @@ def search(
         raise typer.Exit(1)
 
     sources_cfg = load_sources_config(sources)
-    all_results = []
+    all_results: list = []
+    allow_fallback = not mock and not no_mock
 
     reddit_cfg = sources_cfg.get("reddit", {})
     if reddit_cfg.get("enabled", True):
@@ -111,12 +137,17 @@ def search(
                 query_suffix=reddit_cfg.get("query_suffix", "pokemon card"),
             )
             results = connector.search_cards(card_list, limit_per_card=limit)
-            if not results:
-                console.print(
-                    "[yellow]  Reddit sem resultados (possível bloqueio). "
-                    "Tente --mock ou verifique REDDIT_USER_AGENT.[/yellow]"
+            if results:
+                all_results.extend(results)
+            elif no_mock:
+                _print_source_error(
+                    "Reddit",
+                    "Configure REDDIT_USER_AGENT no .env ou tente de outra rede.",
                 )
-            all_results.extend(results)
+            elif allow_fallback:
+                console.print("[yellow]  Reddit vazio — usando fallback mock...[/yellow]")
+                for card in card_list:
+                    all_results.extend(reddit_mock(card))
 
     ml_cfg = sources_cfg.get("mercado_livre", {})
     if ml_cfg.get("enabled", True):
@@ -130,10 +161,20 @@ def search(
                 category=ml_cfg.get("category", ""),
             )
             results = connector.search_cards(card_list, limit_per_card=limit)
-            all_results.extend(results)
+            if results:
+                all_results.extend(results)
+            elif no_mock:
+                _print_source_error(
+                    "Mercado Livre",
+                    "Tente de rede residencial; APIs podem bloquear IPs de datacenter.",
+                )
+            elif allow_fallback:
+                console.print("[yellow]  Mercado Livre vazio — usando fallback mock...[/yellow]")
+                for card in card_list:
+                    all_results.extend(ml_mock(card))
 
     yt_cfg = sources_cfg.get("youtube", {})
-    if yt_cfg.get("enabled", False):
+    if yt_cfg.get("enabled", False) and not mock:
         console.print("[cyan]→ YouTube[/cyan]")
         connector = YouTubeConnector(
             max_comments_per_video=yt_cfg.get("max_comments_per_video", 20),
@@ -150,23 +191,28 @@ def search(
         console.print("[cyan]→ Discord (placeholder)[/cyan]")
         DiscordPlaceholderConnector().search_cards(card_list)
 
-    if not all_results and fallback_mock and not mock:
-        console.print(
-            "[yellow]⚠ APIs retornaram vazio (possível bloqueio de IP). "
-            "Usando dados simulados como fallback...[/yellow]"
-        )
-        for card in card_list:
-            all_results.extend(reddit_mock(card))
-            all_results.extend(ml_mock(card))
-
     if not all_results:
         console.print(
-            "[red]Nenhum resultado coletado. Tente --mock ou verifique sua conexão.[/red]"
+            Panel(
+                "[red]Nenhum resultado coletado.[/red]\n\n"
+                "Opções:\n"
+                "  • [bold]python3 -m src.main search --mock[/bold] — testar com dados simulados\n"
+                "  • Verifique internet e .env\n"
+                "  • Rode sem --no-mock para permitir fallback automático",
+                border_style="red",
+                title="Busca sem resultados",
+            )
         )
         raise typer.Exit(1)
 
+    mode_counts = count_by_data_mode(all_results)
     saved = save_results(all_results, DEFAULT_DB)
     console.print(f"\n[green]✓ {saved} resultados salvos em {DEFAULT_DB}[/green]")
+    console.print(
+        f"[dim]  live: {mode_counts['live']} | "
+        f"mock: {mode_counts['mock']} | "
+        f"manual_import: {mode_counts['manual_import']}[/dim]"
+    )
 
     csv_path = export_to_csv(DEFAULT_CSV, DEFAULT_DB)
     console.print(f"[green]✓ CSV exportado para {csv_path}[/green]\n")
@@ -194,9 +240,7 @@ def report(
         console.print(
             "[yellow]Nenhum dado salvo ainda.\n\n"
             "Execute primeiro:\n"
-            "  python3 -m src search --mock --limit 5\n\n"
-            "Ou, se preferir, use o atalho:\n"
-            "  ./radar.sh search --mock --limit 5[/yellow]"
+            "  python3 -m src.main search --mock --limit 5[/yellow]"
         )
         raise typer.Exit(0)
 
@@ -206,7 +250,9 @@ def report(
         raise typer.Exit(0)
 
     card_list = load_cards(cards)
-    console.print("[bold blue]📊 Relatório de Inteligência de Mercado — Radar Pokémon Brasil[/bold blue]\n")
+    console.print(
+        "[bold blue]📊 Relatório de Inteligência de Mercado — Radar Pokémon Brasil[/bold blue]\n"
+    )
     display_market_report(console, results, monitored_cards=card_list, top_signals=top)
 
 
@@ -227,6 +273,31 @@ def export_cmd(
     path = export_to_csv(output, DEFAULT_DB)
     count = len(fetch_all(DEFAULT_DB))
     console.print(f"[green]✓ {count} resultados exportados para {path}[/green]")
+
+
+@app.command("reset-db")
+def reset_db(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-y",
+        help="Apaga sem pedir confirmação.",
+    ),
+) -> None:
+    """Apaga todos os dados de data/radar.db e data/radar_results.csv."""
+    if not force:
+        console.print(
+            "[yellow]Isso vai apagar TODOS os resultados salvos em:[/yellow]\n"
+            f"  • {DEFAULT_DB}\n"
+            f"  • {DEFAULT_CSV}\n"
+        )
+        confirmed = typer.confirm("Deseja continuar?")
+        if not confirmed:
+            console.print("[dim]Operação cancelada.[/dim]")
+            raise typer.Exit(0)
+
+    reset_all_data(DEFAULT_DB, DEFAULT_CSV)
+    console.print("[green]✓ Banco e CSV resetados com sucesso.[/green]")
 
 
 def main() -> None:

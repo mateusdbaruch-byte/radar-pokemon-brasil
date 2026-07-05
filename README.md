@@ -124,24 +124,69 @@ Edite `.env` apenas se quiser personalizar o Reddit ou habilitar YouTube.
 
 ### Buscar sinais
 
+**Dados reais (validação de mercado — recomendado):**
 ```bash
-python3 -m src search --mock --limit 5     # teste offline (recomendado na 1ª vez)
-python3 -m src search --limit 20           # busca real (Reddit + Mercado Livre)
+python3 -m src.main search --cards config/cards.yml --limit 20 --no-mock
+```
+Sem fallback simulado. Se Reddit ou Mercado Livre falharem, a fonte retorna **zero resultados** e mostra um aviso amigável.
+
+**Dados simulados (teste offline):**
+```bash
+python3 -m src.main search --mock --limit 5
+```
+Todos os resultados são marcados como `data_mode=mock`.
+
+**Busca padrão (com fallback automático):**
+```bash
+python3 -m src.main search --limit 20
+```
+Tenta APIs reais primeiro; se falharem, usa mock automaticamente (útil para demonstração).
+
+Atalhos:
+```bash
+./radar.sh search --no-mock --limit 20    # Linux/Mac
+radar.bat search --mock --limit 5         # Windows
 ```
 
-Ou com atalho:
+### Limpar o banco antes de uma nova validação
+
 ```bash
-./radar.sh search --mock --limit 5          # Linux/Mac
-radar.bat search --mock --limit 5         # Windows
+python3 -m src.main reset-db
+```
+Pede confirmação antes de apagar `data/radar.db` e `data/radar_results.csv`.
+
+Sem confirmação (scripts automatizados):
+```bash
+python3 -m src.main reset-db --force
 ```
 
 ### Ver relatório de inteligência de mercado
 
 ```bash
-python3 -m src report
+python3 -m src.main report
 ```
 
-O relatório é organizado em **4 camadas de inteligência** (não apenas uma lista de dados):
+### Como saber se os dados são reais ou simulados
+
+Cada resultado tem o campo **`data_mode`**:
+
+| Valor | Significado |
+|-------|-------------|
+| `live` | Coletado de API pública real (Reddit, Mercado Livre…) |
+| `mock` | Dado simulado — **não use para decisão de mercado** |
+| `manual_import` | Importado manualmente (ex.: exportação Discord) |
+
+No **relatório**, o painel **"Modo dos dados"** mostra:
+- quantos resultados são `live`, `mock` e `manual_import`
+- um **aviso vermelho grande** se houver qualquer dado `mock`
+
+No **CSV** (`data/radar_results.csv`), a coluna `data_mode` indica a origem de cada linha.
+
+**Regra prática:** só confie no relatório para decisões se **live > 0** e **mock = 0**.
+
+---
+
+### Relatório — estrutura
 
 #### 1. Resumo executivo
 Visão geral do mercado monitorado: quantas cartas têm dados, total de sinais de compra/venda, anúncios e qual carta tem maior demanda.
@@ -194,18 +239,21 @@ Arquivo gerado: `data/radar_results.csv` (abre no Excel ou Google Sheets)
 
 | Comando | O que faz |
 |---------|-----------|
-| `python3 -m src search` | Busca sinais nas fontes configuradas |
-| `python3 -m src report` | Relatório de inteligência de mercado |
-| `python3 -m src export` | Exporta CSV |
-| `python3 -m src --help` | Lista todas as opções |
+| `python3 -m src.main search` | Busca sinais nas fontes configuradas |
+| `python3 -m src.main search --no-mock` | Apenas dados reais (validação) |
+| `python3 -m src.main search --mock` | Apenas dados simulados |
+| `python3 -m src.main report` | Relatório de inteligência de mercado |
+| `python3 -m src.main export` | Exporta CSV |
+| `python3 -m src.main reset-db` | Apaga banco e CSV (com confirmação) |
+| `python3 -m src.main --help` | Lista todas as opções |
 
 **Opções do search:**
 
 | Opção | Descrição |
 |-------|-----------|
-| `--mock` | Dados simulados (sem internet) |
+| `--mock` | Apenas dados simulados (`data_mode=mock`) |
+| `--no-mock` | Sem fallback mock se APIs falharem |
 | `--limit 20` | Máximo por carta por fonte |
-| `--no-fallback-mock` | Não usar mock se APIs falharem |
 
 ---
 
@@ -279,7 +327,9 @@ python3 -m pytest tests/ -v
 | `ModuleNotFoundError: src` | Execute da **pasta raiz** do projeto |
 | `pip: command not found` | Use `python3 -m pip install -r requirements.txt` |
 | `Permission denied: ./radar.sh` | Rode `chmod +x radar.sh` |
-| Reddit/ML sem resultados | Use `--mock` ou rode de rede residencial |
+| Reddit/ML sem resultados com `--no-mock` | Normal em datacenter; rode de rede residencial |
+| Relatório com aviso vermelho | Há dados `mock` — não use para decisão de mercado |
+| Quer zerar histórico acumulado | `python3 -m src.main reset-db` |
 | PowerShell bloqueia ativação | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | Banco vazio no report | Execute `search` antes do `report` |
 

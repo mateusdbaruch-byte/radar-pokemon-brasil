@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from src.models import RadarResult
+from src.models import DataMode, RadarResult
 from src.normalizer import normalize_card_name
 from src.scoring import apply_scoring_to_result
 
@@ -97,6 +97,7 @@ class DiscordPlaceholderConnector:
                 author_or_seller=msg.get("author", ""),
                 intent_type=intent_type,
                 intent_score=intent_score,
+                data_mode=DataMode.MANUAL_IMPORT,
             )
             result.set_raw_data(msg)
             results.append(result)

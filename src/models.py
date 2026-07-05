@@ -21,6 +21,14 @@ class IntentType(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class DataMode(str, Enum):
+    """Origem dos dados coletados."""
+
+    LIVE = "live"
+    MOCK = "mock"
+    MANUAL_IMPORT = "manual_import"
+
+
 class RadarResult(BaseModel):
     """Um resultado coletado de uma fonte pública."""
 
@@ -43,6 +51,7 @@ class RadarResult(BaseModel):
     currency: str = "BRL"
     location: str = ""
     raw_data_json: str = "{}"
+    data_mode: DataMode = DataMode.LIVE
 
     def to_db_row(self) -> dict[str, Any]:
         """Converte o modelo para linha do banco SQLite."""
@@ -66,6 +75,7 @@ class RadarResult(BaseModel):
             "currency": self.currency,
             "location": self.location,
             "raw_data_json": self.raw_data_json,
+            "data_mode": self.data_mode.value,
         }
 
     @classmethod
@@ -95,8 +105,16 @@ class RadarResult(BaseModel):
             currency=row.get("currency") or "BRL",
             location=row.get("location") or "",
             raw_data_json=row.get("raw_data_json") or "{}",
+            data_mode=DataMode(row.get("data_mode") or DataMode.LIVE.value),
         )
 
     def set_raw_data(self, data: Any) -> None:
         """Serializa dados brutos da API para JSON."""
         self.raw_data_json = json.dumps(data, ensure_ascii=False, default=str)
+
+
+def tag_results(results: list[RadarResult], mode: DataMode) -> list[RadarResult]:
+    """Define data_mode em uma lista de resultados."""
+    for result in results:
+        result.data_mode = mode
+    return results

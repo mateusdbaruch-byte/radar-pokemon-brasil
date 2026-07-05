@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from src.models import RadarResult
+from src.models import DataMode, RadarResult, tag_results
 from src.normalizer import normalize_card_name
 from src.scoring import apply_scoring_to_result
 
@@ -150,4 +150,6 @@ def get_mock_results(card_name: str) -> list[RadarResult]:
     }
     connector = MercadoLivreConnector()
     result = connector._item_to_result(mock_item, card_name)
-    return [result] if result else []
+    if not result:
+        return []
+    return tag_results([result], DataMode.MOCK)
