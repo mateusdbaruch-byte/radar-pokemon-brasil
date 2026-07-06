@@ -1323,6 +1323,37 @@ def opportunity_report_cmd() -> None:
     display_opportunity_report(console)
 
 
+@app.command("dashboard")
+def dashboard_cmd(
+    port: int = typer.Option(8501, "--port", "-p", help="Porta do servidor Streamlit"),
+) -> None:
+    """Abre a dashboard visual local (Streamlit, somente leitura)."""
+    import subprocess
+    import sys
+
+    app_path = PROJECT_ROOT / "src" / "dashboard" / "app.py"
+    if not app_path.exists():
+        console.print(f"[red]Dashboard não encontrada: {app_path}[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[bold blue]🇧🇷 Radar Pokémon Brasil — Dashboard[/bold blue]\n"
+        f"[dim]http://localhost:{port} | somente leitura | Ctrl+C para encerrar[/dim]\n"
+    )
+    code = subprocess.call([
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--browser.gatherUsageStats",
+        "false",
+    ])
+    raise typer.Exit(code)
+
+
 @app.command("add-wishlist-lead")
 def add_wishlist_lead(
     name: str = typer.Option(..., "--name", "-n", prompt="Nome"),

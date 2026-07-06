@@ -91,6 +91,21 @@ python3 -m src.main stale-opportunities-report
 
 Modos de orçamento por perfil: `economy` (50/30/20), `balanced` (40/30/30), `market_focus` (20/30/50).
 
+#### Como abrir a dashboard (visual local)
+
+Dashboard **somente leitura** — lê `data/radar.db` sem chamar SerpAPI.
+
+```bash
+pip install -r requirements.txt
+python3 -m src.main dashboard
+# ou:
+streamlit run src/dashboard/app.py
+```
+
+Páginas: Visão Geral, Opportunity Inbox, Card Radar, Query Performance, Rejeitados, Orçamento, Saúde das Fontes, Execuções.
+
+Se o banco estiver vazio, a dashboard mostra os comandos sugeridos para rodar o agente no terminal.
+
 **Teste/desenvolvimento:**
 
 ```bash
@@ -173,6 +188,7 @@ Comandos de revisão:
 | `profiles-summary` | Lista perfis, templates e filtros |
 | `next-run-plan` | Plano de execução antes de consumir SerpAPI |
 | `run-daily-radar` | Execução incremental diária (preserva histórico) |
+| `dashboard` | Abre dashboard Streamlit local (somente leitura) |
 | `query-template-report` | Performance por template de query |
 | `stale-opportunities-report` | Oportunidades antigas ou freshness unknown |
 | `run-all-profiles` | Executa os 3 perfis de uma vez (teste/batch) |
