@@ -24,7 +24,6 @@ from src.paths import DEFAULT_WATCHLIST
 from src.search_budget import (
     BudgetMode,
     SearchBudgetContext,
-    check_profile_mix_economy,
     economy_max_templates,
     economy_queries_per_card,
 )
@@ -74,7 +73,7 @@ def _scan_web_search(
         return [], None
 
     qcfg = quality_config or QualityFilterConfig()
-    templates = list(profile.query_templates) if profile else None
+    templates = [s.template for s in profile.prioritized_specs()] if profile else None
     queries_per_card: int | None = None
 
     if budget_mode == BudgetMode.ECONOMY:
@@ -83,13 +82,6 @@ def _scan_web_search(
         if templates:
             templates = templates[:economy_max_templates(len(templates))]
         queries_per_card = economy_queries_per_card()
-        if profile:
-            mix_warn = check_profile_mix_economy(profile.name)
-            if mix_warn:
-                stats = WebSearchScanStats()
-                stats.budget_stopped = True
-                stats.budget_message = mix_warn
-                return [], stats
 
     per_query = max(1, limit // max(len(templates or [1]), 1))
     scan = connector.scan_cards(

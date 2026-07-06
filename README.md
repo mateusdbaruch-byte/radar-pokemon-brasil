@@ -63,7 +63,42 @@ python3 -m src.main profiles-summary
 
 Configs: `config/search_profiles.yml`, `config/domain_groups.yml`
 
-#### Fluxo recomendado — radar híbrido (3 perfis)
+#### Fluxo recomendado — radar incremental (produção)
+
+`reset-db` é **apenas para teste/desenvolvimento**. No uso real, o histórico é preservado.
+
+**Planejar:**
+
+```bash
+python3 -m src.main next-run-plan --cards Charizard,Umbreon,Mew --daily-budget 20 --budget-mode economy
+```
+
+**Rodar:**
+
+```bash
+python3 -m src.main run-daily-radar --cards Charizard,Umbreon,Mew --daily-budget 20 --budget-mode economy --recency-days 30
+```
+
+**Analisar:**
+
+```bash
+python3 -m src.main opportunity-inbox
+python3 -m src.main unified-opportunity-report
+python3 -m src.main query-template-report
+python3 -m src.main search-budget-report
+python3 -m src.main stale-opportunities-report
+```
+
+Modos de orçamento por perfil: `economy` (50/30/20), `balanced` (40/30/30), `market_focus` (20/30/50).
+
+**Teste/desenvolvimento:**
+
+```bash
+python3 -m src.main reset-db --force
+python3 -m src.main run-all-profiles --cards Charizard,Umbreon,Mew --limit 5 --budget-mode economy
+```
+
+#### Fluxo recomendado — radar híbrido (scan completo pontual)
 
 Calibra demanda, oferta e referência de preço em uma única execução:
 
@@ -136,7 +171,11 @@ Comandos de revisão:
 | Comando | Descrição |
 |---------|-----------|
 | `profiles-summary` | Lista perfis, templates e filtros |
-| `run-all-profiles` | Executa os 3 perfis e gera relatórios unificados |
+| `next-run-plan` | Plano de execução antes de consumir SerpAPI |
+| `run-daily-radar` | Execução incremental diária (preserva histórico) |
+| `query-template-report` | Performance por template de query |
+| `stale-opportunities-report` | Oportunidades antigas ou freshness unknown |
+| `run-all-profiles` | Executa os 3 perfis de uma vez (teste/batch) |
 | `unified-opportunity-report` | Radar híbrido por carta (demanda/oferta/referência) |
 | `card-radar --card N` | Visão completa de uma carta |
 | `profile-quality-test` | Teste de qualidade por perfil |

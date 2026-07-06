@@ -12,6 +12,7 @@ from rich.table import Table
 from src.opportunity_db import (
     count_domains_by_review,
     count_human_reviews,
+    count_opportunities_by_profile,
     count_opportunities_by_source,
     count_rejected_by_profile,
     count_rejected_by_reason,
@@ -27,11 +28,14 @@ from src.opportunity_db import (
     fetch_false_positives,
     fetch_opportunities,
     fetch_opportunities_by_card,
+    fetch_opportunities_since,
     fetch_queries_with_false_negatives,
     fetch_query_runs,
     fetch_rejected_by_profile,
     fetch_rejected_results,
     fetch_reviewed_opportunities,
+    fetch_scan_runs,
+    fetch_stale_opportunities,
     fetch_wishlist_leads,
 )
 from src.opportunity_quality import (
@@ -41,7 +45,8 @@ from src.opportunity_quality import (
     rejection_label,
     TCG_SPECIALIZED_DOMAINS,
 )
-from src.search_profiles import load_search_profiles
+from src.query_template_perf import build_template_report
+from src.search_profiles import load_search_profiles, profiles_template_config
 from src.opportunity_models import Opportunity, OpportunityType
 from src.source_registry import SourceAccess, get_source_registry
 
@@ -848,11 +853,41 @@ def display_unified_opportunity_report(console: Console) -> None:
     if not cards:
         console.print(
             Panel(
-                "Nenhuma oportunidade salva. Rode run-all-profiles primeiro.",
+                "Nenhuma oportunidade salva. Rode run-daily-radar primeiro.",
                 border_style="yellow",
             )
         )
         return
+
+    last_24h = fetch_opportunities_since(1)
+    last_7d = fetch_opportunities_since(7)
+    by_profile = count_opportunities_by_profile()
+
+    console.print(Panel(
+        f"[bold]Novas (24h):[/bold] {len(last_24h)}\n"
+        f"[bold]Últimos 7 dias:[/bold] {len(last_7d)}\n"
+        f"[bold]Por perfil:[/bold] "
+        + (", ".join(f"{k}={v}" for k, v in by_profile.items()) if by_profile else "—"),
+        title="Recência",
+        border_style="blue",
+    ))
+
+    card_activity: Counter[str] = Counter(o.normalized_card_name for o in last_7d)
+    if card_activity:
+        console.print("\n[bold]Cartas com mais movimentação (7d)[/bold]")
+        for card, cnt in card_activity.most_common(5):
+            console.print(f"  • {card}: {cnt}")
+
+    incomplete = []
+    for card in cards:
+        opps = fetch_opportunities_by_card(card)
+        has_ref = any(o.profile == "market_reference" for o in opps)
+        if not has_ref:
+            incomplete.append(card)
+    if incomplete:
+        console.print("\n[bold yellow]Cartas sem market_reference[/bold yellow]")
+        for card in incomplete:
+            console.print(f"  • {card} — priorize perfil market_reference no próximo run")
 
     all_stats = [build_card_unified_stats(card) for card in cards]
     all_stats.sort(key=lambda s: s.market_opportunity_score, reverse=True)
@@ -978,3 +1013,149 @@ def display_card_radar(console: Console, card: str) -> None:
         console.print(f"  • {line}")
 
     console.print(f"\n[bold]Recomendação:[/bold] {build_card_recommendation(stats)}")
+
+
+def display_next_run_plan(
+    console: Console,
+    plan,
+) -> None:
+    """Exibe plano de execução antes do run-daily-radar."""
+    console.print("[bold blue]📋 Next Run Plan — execução incremental[/bold blue]\n")
+    console.print(Panel(
+        f"[bold]Cartas:[/bold] {', '.join(plan.cards)}\n"
+        f"[bold]Modo:[/bold] {plan.budget_mode.value}\n"
+        f"[bold]Orçamento solicitado:[/bold] {plan.daily_budget}\n"
+        f"[bold]Orçamento efetivo hoje:[/bold] {plan.effective_budget}\n"
+        f"[bold]Queries planejadas:[/bold] {plan.total_planned}\n"
+        f"[bold]Estimativa API:[/bold] {plan.api_calls_estimated}\n"
+        f"[bold]Cache hits esperados:[/bold] {plan.cache_hits}",
+        title="Resumo",
+        border_style="blue",
+    ))
+
+    for profile_plan in plan.profiles:
+        console.print(f"\n[bold cyan]{profile_plan.profile}[/bold cyan] "
+                      f"({profile_plan.query_budget} queries)")
+        if not profile_plan.queries:
+            console.print("  [dim]Nenhuma query alocada[/dim]")
+            continue
+        table = Table(show_lines=True)
+        table.add_column("Carta")
+        table.add_column("Query", max_width=40)
+        table.add_column("Cache", justify="center")
+        for q in profile_plan.queries:
+            table.add_row(
+                q.card,
+                q.query[:40],
+                "sim" if q.from_cache else "não",
+            )
+        console.print(table)
+
+
+def display_query_template_report(console: Console) -> None:
+    """Relatório de performance por template de query."""
+    rows = build_template_report(profiles_template_config())
+    console.print("[bold blue]📊 Query Template Report[/bold blue]\n")
+
+    if not rows:
+        console.print(Panel("Nenhum template configurado.", border_style="yellow"))
+        return
+
+    best = [r for r in rows if r.saved > 0][:5]
+    worst = sorted(
+        [r for r in rows if r.rejected > 0],
+        key=lambda r: r.rejected,
+        reverse=True,
+    )[:5]
+
+    if best:
+        console.print("[bold green]Melhores templates[/bold green]")
+        for r in best:
+            console.print(
+                f"  • [{r.profile}] {r.template[:50]} — "
+                f"taxa {r.success_rate:.0%} ({r.saved} salvos)"
+            )
+
+    if worst:
+        console.print("\n[bold red]Templates com mais rejeições[/bold red]")
+        for r in worst:
+            tip = f" — {r.suggestion}" if r.suggestion else ""
+            console.print(
+                f"  • [{r.profile}] {r.template[:50]} — "
+                f"{r.rejected} rejeitados{tip}"
+            )
+
+    console.print("\n[bold]Tabela completa[/bold]\n")
+    table = Table(show_lines=True)
+    table.add_column("Perfil", max_width=14)
+    table.add_column("Template", max_width=32)
+    table.add_column("Ativo", justify="center")
+    table.add_column("Peso", justify="right")
+    table.add_column("Taxa", justify="right")
+    table.add_column("Salvos", justify="right")
+    table.add_column("Rej.", justify="right")
+    table.add_column("Sugestão", max_width=24)
+    for r in rows:
+        table.add_row(
+            r.profile[:14],
+            r.template[:32],
+            "sim" if r.enabled else "não",
+            str(r.priority_weight),
+            f"{r.success_rate:.0%}",
+            str(r.saved),
+            str(r.rejected),
+            r.suggestion[:24],
+        )
+    console.print(table)
+
+
+def display_stale_opportunities_report(
+    console: Console,
+    *,
+    min_age_days: int = 30,
+) -> None:
+    """Oportunidades antigas ou com freshness desconhecida."""
+    stale = fetch_stale_opportunities(min_age_days=min_age_days)
+    console.print("[bold blue]⏳ Stale Opportunities Report[/bold blue]\n")
+
+    if not stale:
+        console.print(Panel("Nenhuma oportunidade stale encontrada.", border_style="green"))
+        return
+
+    by_status: Counter[str] = Counter(o.freshness_status for o in stale)
+    console.print(Panel(
+        f"[bold]Total stale/unknown:[/bold] {len(stale)}\n"
+        + "\n".join(f"  • {k}: {v}" for k, v in by_status.items()),
+        title="Resumo",
+        border_style="yellow",
+    ))
+
+    table = Table(show_lines=True)
+    table.add_column("Carta")
+    table.add_column("Perfil", max_width=14)
+    table.add_column("Freshness")
+    table.add_column("Idade", justify="right")
+    table.add_column("Score", justify="right")
+    table.add_column("Domínio", max_width=18)
+    table.add_column("URL", max_width=24)
+    for opp in stale[:25]:
+        table.add_row(
+            opp.normalized_card_name,
+            (opp.profile or "—")[:14],
+            opp.freshness_status,
+            str(opp.age_days if opp.age_days is not None else "—"),
+            str(opp.opportunity_score),
+            _domain_from_opp(opp)[:18],
+            (opp.url or "—")[:24],
+        )
+    console.print(table)
+
+    runs = fetch_scan_runs(limit=3)
+    if runs:
+        console.print("\n[bold]Últimos scan_runs[/bold]")
+        for run in runs:
+            console.print(
+                f"  • {run.started_at.date()} {run.status} — "
+                f"{run.queries_executed}/{run.queries_planned} queries, "
+                f"{run.opportunities_saved} salvos"
+            )

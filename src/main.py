@@ -63,17 +63,21 @@ from src.opportunity_db import (
     save_opportunities,
 )
 from src.opportunity_models import HumanReview, RejectedReview, WishlistLead
+from src.incremental_radar import build_run_plan, run_daily_radar
 from src.opportunity_reporting import (
     display_card_radar,
+    display_next_run_plan,
     display_opportunity_inbox,
     display_opportunity_report,
     display_precision_report,
     display_profiles_summary,
     display_quality_report,
     display_query_performance_report,
+    display_query_template_report,
     display_rejected_inbox,
     display_rejected_report,
     display_review_opportunities,
+    display_stale_opportunities_report,
     display_unified_opportunity_report,
 )
 from src.search_profiles import get_search_profile, list_profile_names
@@ -630,6 +634,118 @@ def run_all_profiles_cmd(
 def unified_opportunity_report_cmd() -> None:
     """Relatório unificado cruzando demanda, oferta e referência por carta."""
     display_unified_opportunity_report(console)
+
+
+@app.command("next-run-plan")
+def next_run_plan_cmd(
+    cards: str = typer.Option(
+        "Charizard,Umbreon,Mew",
+        "--cards",
+        "-c",
+        help="Cartas separadas por vírgula",
+    ),
+    daily_budget: int = typer.Option(20, "--daily-budget", help="Orçamento diário de queries API"),
+    budget_mode: BudgetMode = typer.Option(
+        BudgetMode.ECONOMY,
+        "--budget-mode",
+        help="economy, balanced ou market_focus",
+    ),
+    limit: int = typer.Option(5, "--limit", "-l", help="Resultados por query"),
+) -> None:
+    """Mostra plano de execução antes de consumir SerpAPI."""
+    card_list = parse_card_list(cards)
+    if not card_list:
+        console.print("[red]Informe cartas com --cards[/red]")
+        raise typer.Exit(1)
+    plan = build_run_plan(
+        card_list,
+        daily_budget=daily_budget,
+        budget_mode=budget_mode,
+        limit_per_query=limit,
+    )
+    display_next_run_plan(console, plan)
+
+
+@app.command("run-daily-radar")
+def run_daily_radar_cmd(
+    cards: str = typer.Option(
+        "Charizard,Umbreon,Mew",
+        "--cards",
+        "-c",
+        help="Cartas separadas por vírgula",
+    ),
+    daily_budget: int = typer.Option(20, "--daily-budget", help="Orçamento diário de queries API"),
+    budget_mode: BudgetMode = typer.Option(
+        BudgetMode.ECONOMY,
+        "--budget-mode",
+        help="economy, balanced ou market_focus",
+    ),
+    limit: int = typer.Option(5, "--limit", "-l"),
+    recency_days: int = typer.Option(30, "--recency-days", help="Priorizar resultados recentes"),
+    no_cache: bool = typer.Option(False, "--no-cache"),
+    cache_ttl_hours: float = typer.Option(24.0, "--cache-ttl-hours"),
+) -> None:
+    """Execução incremental diária — não apaga histórico, distribui orçamento por perfil."""
+    card_list = parse_card_list(cards)
+    if not card_list:
+        console.print("[red]Informe cartas com --cards[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[bold blue]📡 Daily Radar — execução incremental[/bold blue]\n"
+        f"[dim]Cartas: {', '.join(card_list)} | orçamento: {daily_budget} | "
+        f"modo: {budget_mode.value} | recency: {recency_days}d[/dim]\n"
+    )
+
+    plan = build_run_plan(
+        card_list,
+        daily_budget=daily_budget,
+        budget_mode=budget_mode,
+        limit_per_query=limit,
+        cache_ttl_hours=cache_ttl_hours,
+    )
+    display_next_run_plan(console, plan)
+    console.print()
+
+    result = run_daily_radar(
+        card_list,
+        daily_budget=daily_budget,
+        budget_mode=budget_mode,
+        limit_per_query=limit,
+        recency_days=recency_days,
+        no_cache=no_cache,
+        cache_ttl_hours=cache_ttl_hours,
+    )
+
+    console.print(
+        f"\n[bold]Scan run {result.scan_run_id[:8]}…[/bold] "
+        f"status={'parado (orçamento)' if result.budget_stopped else 'concluído'}"
+    )
+    if result.message:
+        console.print(f"[yellow]{result.message}[/yellow]")
+    console.print(
+        f"  Queries: {result.queries_executed} | "
+        f"Salvos: {result.saved} (+{result.merged} mesclados) | "
+        f"Rejeitados: {result.rejected}"
+    )
+
+    display_opportunity_inbox(console, limit=10)
+    console.print()
+    display_unified_opportunity_report(console)
+
+
+@app.command("query-template-report")
+def query_template_report_cmd() -> None:
+    """Performance por template — melhores, piores e sugestões de ajuste."""
+    display_query_template_report(console)
+
+
+@app.command("stale-opportunities-report")
+def stale_opportunities_report_cmd(
+    min_age_days: int = typer.Option(30, "--min-age-days", help="Idade mínima em dias"),
+) -> None:
+    """Oportunidades antigas, desconhecidas ou potencialmente vencidas."""
+    display_stale_opportunities_report(console, min_age_days=min_age_days)
 
 
 @app.command("card-radar")

@@ -62,6 +62,7 @@ class TestWebSearchRetry:
       monkeypatch.setenv("SERPAPI_KEY", "test-key")
       monkeypatch.setenv("WEB_SEARCH_MAX_RETRIES", "2")
       monkeypatch.setenv("WEB_SEARCH_DELAY_SECONDS", "0")
+      monkeypatch.setenv("SERPAPI_DAILY_BUDGET", "1000")
 
       connector = WebSearchConnector(
           config=WebSearchConfig(timeout_seconds=1, delay_seconds=0, max_retries=2)
@@ -69,7 +70,7 @@ class TestWebSearchRetry:
 
       call_count = {"n": 0}
 
-      def fake_request(query, limit, timeout):
+      def fake_request(query, limit, timeout, recency_days=None):
           call_count["n"] += 1
           raise requests.Timeout("timed out")
 
@@ -84,12 +85,13 @@ class TestWebSearchRetry:
   def test_success_without_retry(self, monkeypatch):
       monkeypatch.setenv("WEB_SEARCH_PROVIDER", "serpapi")
       monkeypatch.setenv("SERPAPI_KEY", "test-key")
+      monkeypatch.setenv("SERPAPI_DAILY_BUDGET", "1000")
 
       connector = WebSearchConnector(
           config=WebSearchConfig(timeout_seconds=5, delay_seconds=0, max_retries=2)
       )
 
-      def fake_request(query, limit, timeout):
+      def fake_request(query, limit, timeout, recency_days=None):
           return 200, {
               "organic_results": [
                   {"title": "Procuro Charizard", "snippet": "compro", "link": "https://ex.com/a"},

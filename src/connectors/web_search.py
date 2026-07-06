@@ -11,6 +11,7 @@ from typing import Callable
 
 import requests
 
+from src.freshness import apply_freshness_to_opportunity, google_recency_param, serpapi_recency_param
 from src.models import DataMode
 from src.opportunity_db import save_query_run, save_rejected_result
 from src.opportunity_models import Opportunity
@@ -179,6 +180,7 @@ class WebSearchConnector:
         query: str,
         limit: int,
         timeout: float,
+        recency_days: int | None = None,
     ) -> tuple[int, dict]:
         if self.provider == "bing":
             key = os.getenv("BING_SEARCH_API_KEY", "").strip()
@@ -191,33 +193,41 @@ class WebSearchConnector:
             return resp.status_code, resp.json() if resp.status_code == 200 else {}
 
         if self.provider == "google":
+            params: dict = {
+                "key": os.getenv("GOOGLE_SEARCH_API_KEY", "").strip(),
+                "cx": os.getenv("GOOGLE_SEARCH_ENGINE_ID", "").strip(),
+                "q": query,
+                "num": min(limit, 10),
+                "lr": "lang_pt",
+                "hl": "pt",
+                "cr": "countryBR",
+            }
+            date_restrict = google_recency_param(recency_days)
+            if date_restrict:
+                params["dateRestrict"] = date_restrict
             resp = self.session.get(
                 "https://www.googleapis.com/customsearch/v1",
-                params={
-                    "key": os.getenv("GOOGLE_SEARCH_API_KEY", "").strip(),
-                    "cx": os.getenv("GOOGLE_SEARCH_ENGINE_ID", "").strip(),
-                    "q": query,
-                    "num": min(limit, 10),
-                    "lr": "lang_pt",
-                    "hl": "pt",
-                    "cr": "countryBR",
-                },
+                params=params,
                 timeout=timeout,
             )
             return resp.status_code, resp.json() if resp.status_code == 200 else {}
 
         if self.provider == "serpapi":
+            params = {
+                "api_key": os.getenv("SERPAPI_KEY", "").strip(),
+                "q": query,
+                "engine": "google",
+                "google_domain": "google.com.br",
+                "hl": "pt",
+                "gl": "br",
+                "num": min(limit, 20),
+            }
+            tbs = serpapi_recency_param(recency_days)
+            if tbs:
+                params["tbs"] = tbs
             resp = self.session.get(
                 "https://serpapi.com/search",
-                params={
-                    "api_key": os.getenv("SERPAPI_KEY", "").strip(),
-                    "q": query,
-                    "engine": "google",
-                    "google_domain": "google.com.br",
-                    "hl": "pt",
-                    "gl": "br",
-                    "num": min(limit, 20),
-                },
+                params=params,
                 timeout=timeout,
             )
             return resp.status_code, resp.json() if resp.status_code == 200 else {}
@@ -271,6 +281,7 @@ class WebSearchConnector:
 
         ctx = budget_ctx or SearchBudgetContext(provider=self.provider)
         ctx.provider = self.provider
+        recency_days = ctx.recency_days
 
         if ctx.cache_enabled:
             cached_hits = try_cache_hit(ctx, query, limit)
@@ -314,6 +325,7 @@ class WebSearchConnector:
                     query,
                     limit,
                     self.config.timeout_seconds,
+                    recency_days=recency_days,
                 )
             except requests.Timeout:
                 last_error = "timeout"
@@ -376,6 +388,8 @@ class WebSearchConnector:
         query_templates: list[str] | None = None,
         budget_ctx: SearchBudgetContext | None = None,
         queries_per_card: int | None = None,
+        planned_queries: list[tuple[str, str]] | None = None,
+        recency_days: int | None = None,
     ) -> WebSearchScanResult:
         """Busca oportunidades para cada carta usando templates de intenção."""
         scan = WebSearchScanResult()
@@ -388,20 +402,23 @@ class WebSearchConnector:
 
         planned: list[tuple[str, str]] = []
         templates = query_templates
-        for card in cards:
-            if templates:
-                queries = [t.format(card=card) for t in templates]
-            else:
-                queries = self.get_queries_for_card(
-                    card,
-                    mode,
-                    buyer_only=qcfg.buyer_only,
-                    seller_only=qcfg.seller_only,
-                )
-            if queries_per_card and queries_per_card > 0:
-                queries = queries[:queries_per_card]
-            for query in queries:
-                planned.append((card, query))
+        if planned_queries:
+            planned = list(planned_queries)
+        else:
+            for card in cards:
+                if templates:
+                    queries = [t.format(card=card) for t in templates]
+                else:
+                    queries = self.get_queries_for_card(
+                        card,
+                        mode,
+                        buyer_only=qcfg.buyer_only,
+                        seller_only=qcfg.seller_only,
+                    )
+                if queries_per_card and queries_per_card > 0:
+                    queries = queries[:queries_per_card]
+                for query in queries:
+                    planned.append((card, query))
 
         cap = max_queries if max_queries is not None else self.config.max_queries_per_run
         if cap > 0:
@@ -430,6 +447,7 @@ class WebSearchConnector:
                 monthly_budget=base_ctx.monthly_budget,
                 stop_when_reached=base_ctx.stop_when_reached,
                 budget_mode=base_ctx.budget_mode,
+                recency_days=recency_days or base_ctx.recency_days,
             )
 
             query_result = self.search_query(query, limit=limit_per_query, budget_ctx=query_ctx)
@@ -499,6 +517,12 @@ class WebSearchConnector:
                 opp.data_mode = DataMode.LIVE
                 opp.why_saved = evaluation.why_saved
                 opp.profile = profile
+                opp = apply_freshness_to_opportunity(
+                    opp,
+                    title=hit.title,
+                    snippet=hit.snippet,
+                    recency_days=recency_days or base_ctx.recency_days,
+                )
                 enrich_opportunity(opp, evidence)
                 if evaluation.refined_type:
                     opp.opportunity_type = evaluation.refined_type

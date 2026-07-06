@@ -49,7 +49,29 @@ CREATE TABLE IF NOT EXISTS opportunities (
     human_review TEXT DEFAULT '',
     human_review_notes TEXT DEFAULT '',
     reviewed_at TEXT,
-    profile TEXT DEFAULT ''
+    profile TEXT DEFAULT '',
+    freshness_status TEXT DEFAULT 'unknown',
+    detected_date TEXT,
+    age_days INTEGER
+);
+"""
+
+CREATE_SCAN_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id TEXT PRIMARY KEY,
+    run_type TEXT NOT NULL DEFAULT 'daily_radar',
+    profiles TEXT NOT NULL DEFAULT '',
+    cards TEXT NOT NULL DEFAULT '',
+    budget_mode TEXT NOT NULL DEFAULT 'economy',
+    query_budget INTEGER NOT NULL DEFAULT 0,
+    queries_planned INTEGER NOT NULL DEFAULT 0,
+    queries_executed INTEGER NOT NULL DEFAULT 0,
+    opportunities_saved INTEGER NOT NULL DEFAULT 0,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    timeout_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL DEFAULT 'running'
 );
 """
 
@@ -136,7 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_query_runs_profile ON query_runs(profile);
 CREATE INDEX IF NOT EXISTS idx_query_runs_executed ON query_runs(executed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_budget_executed ON search_budget_usage(executed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_budget_provider ON search_budget_usage(provider);
-CREATE INDEX IF NOT EXISTS idx_query_cache_lookup ON query_cache(provider, query, result_limit);
+CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at DESC);
 """
 
 
@@ -165,6 +187,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "human_review_notes": "TEXT DEFAULT ''",
         "reviewed_at": "TEXT",
         "profile": "TEXT DEFAULT ''",
+        "freshness_status": "TEXT DEFAULT 'unknown'",
+        "detected_date": "TEXT",
+        "age_days": "INTEGER",
     }
     for col, typedef in new_cols.items():
         if col not in cols:
@@ -200,6 +225,7 @@ def _conn(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
         + CREATE_QUERY_RUNS_TABLE
         + CREATE_SEARCH_BUDGET_TABLE
         + CREATE_QUERY_CACHE_TABLE
+        + CREATE_SCAN_RUNS_TABLE
         + CREATE_OPP_INDEXES
     )
     _migrate(conn)
@@ -1282,3 +1308,182 @@ def fetch_cached_query(
         return json.loads(row["hits_json"])
     except json.JSONDecodeError:
         return None
+
+
+@dataclass
+class ScanRun:
+    id: str
+    run_type: str
+    profiles: str
+    cards: str
+    budget_mode: str
+    query_budget: int
+    queries_planned: int
+    queries_executed: int
+    opportunities_saved: int
+    rejected_count: int
+    timeout_count: int
+    started_at: datetime
+    finished_at: datetime | None
+    status: str
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row | dict[str, Any]) -> ScanRun:
+        data = dict(row)
+        finished = data.get("finished_at")
+        return cls(
+            id=data["id"],
+            run_type=data.get("run_type") or "daily_radar",
+            profiles=data.get("profiles") or "",
+            cards=data.get("cards") or "",
+            budget_mode=data.get("budget_mode") or "",
+            query_budget=int(data.get("query_budget") or 0),
+            queries_planned=int(data.get("queries_planned") or 0),
+            queries_executed=int(data.get("queries_executed") or 0),
+            opportunities_saved=int(data.get("opportunities_saved") or 0),
+            rejected_count=int(data.get("rejected_count") or 0),
+            timeout_count=int(data.get("timeout_count") or 0),
+            started_at=datetime.fromisoformat(data["started_at"]),
+            finished_at=datetime.fromisoformat(finished) if finished else None,
+            status=data.get("status") or "running",
+        )
+
+
+def create_scan_run(
+    *,
+    run_type: str = "daily_radar",
+    profiles: list[str],
+    cards: list[str],
+    budget_mode: str,
+    query_budget: int,
+    queries_planned: int = 0,
+    db_path: Path | str | None = None,
+) -> str:
+    db_path = _resolve_db(db_path)
+    run_id = str(uuid.uuid4())
+    conn = _conn(db_path)
+    conn.execute(
+        """
+        INSERT INTO scan_runs (
+            id, run_type, profiles, cards, budget_mode, query_budget,
+            queries_planned, queries_executed, opportunities_saved,
+            rejected_count, timeout_count, started_at, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, 'running')
+        """,
+        (
+            run_id,
+            run_type,
+            ",".join(profiles),
+            ",".join(cards),
+            budget_mode,
+            query_budget,
+            queries_planned,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return run_id
+
+
+def finish_scan_run(
+    run_id: str,
+    *,
+    queries_executed: int,
+    opportunities_saved: int,
+    rejected_count: int,
+    timeout_count: int = 0,
+    status: str = "completed",
+    db_path: Path | str | None = None,
+) -> None:
+    db_path = _resolve_db(db_path)
+    conn = _conn(db_path)
+    conn.execute(
+        """
+        UPDATE scan_runs
+        SET queries_executed = ?, opportunities_saved = ?, rejected_count = ?,
+            timeout_count = ?, finished_at = ?, status = ?
+        WHERE id = ?
+        """,
+        (
+            queries_executed,
+            opportunities_saved,
+            rejected_count,
+            timeout_count,
+            datetime.now(timezone.utc).isoformat(),
+            status,
+            run_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def fetch_scan_runs(
+    limit: int | None = 10,
+    db_path: Path | str | None = None,
+) -> list[ScanRun]:
+    db_path = _resolve_db(db_path)
+    conn = _conn(db_path)
+    sql = "SELECT * FROM scan_runs ORDER BY started_at DESC"
+    if limit:
+        sql += f" LIMIT {limit}"
+    rows = conn.execute(sql).fetchall()
+    conn.close()
+    return [ScanRun.from_row(r) for r in rows]
+
+
+def fetch_opportunities_since(
+    days: float,
+    db_path: Path | str = DEFAULT_DB,
+) -> list[Opportunity]:
+    from datetime import timedelta
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT * FROM opportunities
+        WHERE collected_at >= ?
+        ORDER BY collected_at DESC
+        """,
+        (since.isoformat(),),
+    ).fetchall()
+    conn.close()
+    return [Opportunity.from_db_row(dict(r)) for r in rows]
+
+
+def count_opportunities_by_profile(
+    db_path: Path | str = DEFAULT_DB,
+) -> dict[str, int]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT profile, COUNT(*) as cnt
+        FROM opportunities
+        WHERE profile IS NOT NULL AND profile != ''
+        GROUP BY profile
+        ORDER BY cnt DESC
+        """
+    ).fetchall()
+    conn.close()
+    return {r["profile"]: r["cnt"] for r in rows}
+
+
+def fetch_stale_opportunities(
+    *,
+    min_age_days: int = 30,
+    db_path: Path | str = DEFAULT_DB,
+) -> list[Opportunity]:
+    conn = _conn(db_path)
+    rows = conn.execute(
+        """
+        SELECT * FROM opportunities
+        WHERE freshness_status IN ('old', 'unknown')
+           OR (age_days IS NOT NULL AND age_days >= ?)
+        ORDER BY collected_at ASC
+        """,
+        (min_age_days,),
+    ).fetchall()
+    conn.close()
+    return [Opportunity.from_db_row(dict(r)) for r in rows]
+

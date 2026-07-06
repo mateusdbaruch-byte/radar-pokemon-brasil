@@ -24,6 +24,56 @@ from src.opportunity_db import (
 class BudgetMode(str, Enum):
     NORMAL = "normal"
     ECONOMY = "economy"
+    BALANCED = "balanced"
+    MARKET_FOCUS = "market_focus"
+
+
+PROFILE_BUDGET_SHARES: dict[BudgetMode, dict[str, float]] = {
+    BudgetMode.ECONOMY: {
+        "demand_leads": 0.50,
+        "supply_deals": 0.30,
+        "market_reference": 0.20,
+    },
+    BudgetMode.BALANCED: {
+        "demand_leads": 0.40,
+        "supply_deals": 0.30,
+        "market_reference": 0.30,
+    },
+    BudgetMode.MARKET_FOCUS: {
+        "demand_leads": 0.20,
+        "supply_deals": 0.30,
+        "market_reference": 0.50,
+    },
+}
+
+DEFAULT_PROFILE_ORDER = ("demand_leads", "supply_deals", "market_reference")
+
+
+def allocate_profile_budget(
+    total_queries: int,
+    budget_mode: BudgetMode,
+    *,
+    profiles: tuple[str, ...] = DEFAULT_PROFILE_ORDER,
+) -> dict[str, int]:
+    """Distribui orçamento de queries API entre perfis."""
+    if total_queries <= 0:
+        return {p: 0 for p in profiles}
+
+    shares = PROFILE_BUDGET_SHARES.get(budget_mode)
+    if not shares:
+        per = max(1, total_queries // len(profiles))
+        return {p: per for p in profiles}
+
+    raw = {p: total_queries * shares.get(p, 0) for p in profiles}
+    allocated = {p: int(raw[p]) for p in profiles}
+    remainder = total_queries - sum(allocated.values())
+    order = sorted(profiles, key=lambda p: raw[p] - allocated[p], reverse=True)
+    idx = 0
+    while remainder > 0 and order:
+        allocated[order[idx % len(order)]] += 1
+        remainder -= 1
+        idx += 1
+    return allocated
 
 
 class BudgetExceededError(Exception):
@@ -63,6 +113,7 @@ class SearchBudgetContext:
     monthly_budget: int | None = None
     stop_when_reached: bool | None = None
     budget_mode: BudgetMode = BudgetMode.NORMAL
+    recency_days: int | None = None
 
     def effective_limits(self) -> BudgetLimits:
         base = BudgetLimits.from_env()
@@ -78,7 +129,7 @@ class SearchBudgetContext:
     def cache_enabled(self) -> bool:
         if self.no_cache:
             return False
-        if self.budget_mode == BudgetMode.ECONOMY:
+        if self.budget_mode in (BudgetMode.ECONOMY, BudgetMode.BALANCED, BudgetMode.MARKET_FOCUS):
             return True
         return self.use_cache
 

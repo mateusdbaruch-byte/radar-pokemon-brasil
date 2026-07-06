@@ -104,6 +104,7 @@ REJECTION_CATEGORY_LABELS: dict[str, str] = {
     "social_weak": "rede social sem evidência",
     "buyer_only": "buyer-only",
     "seller_only": "seller-only",
+    "profile_blocked": "bloqueado no perfil",
 }
 
 
@@ -117,6 +118,7 @@ class QualityFilterConfig:
     allowed_domains: list[str] | None = None
     profile_name: str = ""
     market_reference_mode: bool = False
+    profile_blocked_domains: list[str] | None = None
 
 
 @dataclass
@@ -435,6 +437,13 @@ def evaluate_hit(
 
     if is_blocked_domain(url):
         return _reject("blocked_domain", f"domínio bloqueado: {domain}", domain=domain)
+
+    if config.profile_blocked_domains and domain_matches(domain, config.profile_blocked_domains):
+        return _reject(
+            "profile_blocked",
+            f"domínio bloqueado no perfil {config.profile_name or 'ativo'}: {domain}",
+            domain=domain,
+        )
 
     if signals.negative_context:
         terms = ", ".join(signals.negative_context[:3])

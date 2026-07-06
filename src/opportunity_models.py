@@ -84,6 +84,9 @@ class Opportunity(BaseModel):
     human_review_notes: str = ""
     reviewed_at: Optional[datetime] = None
     profile: str = ""
+    freshness_status: str = "unknown"
+    detected_date: Optional[datetime] = None
+    age_days: Optional[int] = None
 
     def to_db_row(self) -> dict[str, Any]:
         return {
@@ -120,6 +123,9 @@ class Opportunity(BaseModel):
             "human_review_notes": self.human_review_notes,
             "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
             "profile": self.profile,
+            "freshness_status": self.freshness_status,
+            "detected_date": self.detected_date.isoformat() if self.detected_date else None,
+            "age_days": self.age_days,
         }
 
     @classmethod
@@ -167,6 +173,13 @@ class Opportunity(BaseModel):
                 else None
             ),
             profile=row.get("profile") or "",
+            freshness_status=row.get("freshness_status") or "unknown",
+            detected_date=(
+                datetime.fromisoformat(row["detected_date"])
+                if row.get("detected_date")
+                else None
+            ),
+            age_days=int(row["age_days"]) if row.get("age_days") is not None else None,
         )
 
     def set_raw_data(self, data: Any) -> None:
