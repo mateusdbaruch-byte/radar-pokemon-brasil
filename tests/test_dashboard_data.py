@@ -98,3 +98,29 @@ class TestDashboardImports:
         from src.dashboard import app as dashboard_app
         assert dashboard_app.PAGES
         assert "Visão Geral" in dashboard_app.PAGES
+
+
+class TestDashboardCommand:
+    def test_dashboard_cmd_invokes_streamlit_from_project_root(self, monkeypatch):
+        from src.main import dashboard_cmd
+        from src.paths import PROJECT_ROOT
+
+        calls: list[dict] = []
+
+        def fake_call(cmd, cwd=None):
+            calls.append({"cmd": cmd, "cwd": cwd})
+            return 0
+
+        monkeypatch.setattr("subprocess.call", fake_call)
+        with pytest.raises(Exception) as exc:
+            dashboard_cmd(port=8501)
+        assert exc.value.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0]["cwd"] == str(PROJECT_ROOT)
+        assert calls[0]["cmd"][-4:] == [
+            "--server.port",
+            "8501",
+            "--browser.gatherUsageStats",
+            "false",
+        ]
+        assert str(PROJECT_ROOT / "src" / "dashboard" / "app.py") in calls[0]["cmd"]

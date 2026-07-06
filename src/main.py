@@ -1340,17 +1340,20 @@ def dashboard_cmd(
         f"[bold blue]🇧🇷 Radar Pokémon Brasil — Dashboard[/bold blue]\n"
         f"[dim]http://localhost:{port} | somente leitura | Ctrl+C para encerrar[/dim]\n"
     )
-    code = subprocess.call([
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(app_path),
-        "--server.port",
-        str(port),
-        "--browser.gatherUsageStats",
-        "false",
-    ])
+    code = subprocess.call(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(app_path),
+            "--server.port",
+            str(port),
+            "--browser.gatherUsageStats",
+            "false",
+        ],
+        cwd=str(PROJECT_ROOT),
+    )
     raise typer.Exit(code)
 
 

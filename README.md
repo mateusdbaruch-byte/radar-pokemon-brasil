@@ -91,27 +91,9 @@ python3 -m src.main stale-opportunities-report
 
 Modos de orçamento por perfil: `economy` (50/30/20), `balanced` (40/30/30), `market_focus` (20/30/50).
 
-#### Como abrir a dashboard (visual local)
+#### Dashboard visual
 
-Dashboard **somente leitura** — lê `data/radar.db` sem chamar SerpAPI.
-
-```bash
-pip install -r requirements.txt
-python3 -m src.main dashboard
-# ou:
-streamlit run src/dashboard/app.py
-```
-
-Páginas: Visão Geral, Opportunity Inbox, Card Radar, Query Performance, Rejeitados, Orçamento, Saúde das Fontes, Execuções.
-
-Se o banco estiver vazio, a dashboard mostra os comandos sugeridos para rodar o agente no terminal.
-
-**Teste/desenvolvimento:**
-
-```bash
-python3 -m src.main reset-db --force
-python3 -m src.main run-all-profiles --cards Charizard,Umbreon,Mew --limit 5 --budget-mode economy
-```
+Veja a seção **[Rodar dashboard localmente](#rodar-dashboard-localmente)** — a dashboard roda no **seu computador**, sem port forwarding.
 
 #### Fluxo recomendado — radar híbrido (scan completo pontual)
 
@@ -305,6 +287,88 @@ No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.
 |---------|---------|
 | Linux/Mac | `./radar.sh doctor` |
 | Windows | `radar.bat doctor` |
+
+---
+
+## Rodar dashboard localmente
+
+A dashboard é **somente leitura**: ela abre o SQLite em `data/radar.db` e **não chama SerpAPI** ao iniciar. Use-a no seu PC — não depende de workspace remoto nem do painel Ports/Forwarded Ports do Cursor.
+
+### 1. Ter o projeto na sua máquina
+
+Se o código está só no workspace remoto (Cloud Agent), traga para o PC de uma destas formas:
+
+**Opção A — Git (recomendado)**
+
+```bash
+git clone https://github.com/mateusdbaruch-byte/radar-pokemon-brasil.git
+cd radar-pokemon-brasil
+git pull   # se já tiver clonado antes
+```
+
+**Opção B — Download ZIP**
+
+No GitHub: **Code → Download ZIP**, extraia e abra a pasta no terminal.
+
+**Opção C — Sincronizar só o banco de dados**
+
+Para ver os mesmos dados do workspace remoto, copie `data/radar.db` para a mesma pasta no seu PC (via Git LFS, `scp`, arrastar no explorador de arquivos do Cursor, etc.). Sem esse arquivo, a dashboard abre vazia — você pode popular depois com `run-daily-radar` (requer `.env` com SerpAPI).
+
+### 2. Instalar dependências (uma vez)
+
+Na **raiz do projeto** (pasta onde está o `requirements.txt`):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate          # Linux/Mac
+# .venv\Scripts\activate           # Windows
+
+pip install -r requirements.txt
+```
+
+### 3. Abrir a dashboard
+
+Ainda na raiz do projeto:
+
+```bash
+pip install -r requirements.txt
+streamlit run src/dashboard/app.py
+```
+
+Alternativa equivalente (atalho do CLI):
+
+```bash
+python3 -m src.main dashboard
+```
+
+O navegador deve abrir em **http://localhost:8501**. Para encerrar: `Ctrl+C` no terminal.
+
+| Comando | Descrição |
+|---------|-----------|
+| `streamlit run src/dashboard/app.py` | Inicia o Streamlit diretamente |
+| `python3 -m src.main dashboard` | Mesmo efeito, via CLI do projeto |
+| `python3 -m src.main dashboard --port 8502` | Outra porta, se 8501 estiver ocupada |
+
+**Páginas:** Visão Geral, Opportunity Inbox, Card Radar, Query Performance, Rejeitados, Orçamento, Saúde das Fontes, Execuções.
+
+Se `data/radar.db` estiver vazio, a dashboard mostra sugestões de comandos para popular o banco (isso é só texto na tela — ainda sem chamar SerpAPI).
+
+### 4. Popular dados (opcional, fora da dashboard)
+
+A dashboard **não** executa buscas. Para gerar oportunidades no SQLite local:
+
+```bash
+# configure .env com SERPAPI_KEY (só para estes comandos, não para a dashboard)
+python3 -m src.main run-daily-radar
+# ou scan pontual:
+python3 -m src.main run-all-profiles --cards Charizard,Umbreon,Mew --limit 5 --budget-mode economy
+```
+
+Depois, recarregue a dashboard no navegador.
+
+### Por que não usar port forwarding?
+
+Se o Streamlit roda em uma VM/workspace remoto, `http://localhost:8501` no **seu** navegador aponta para o seu PC, não para a VM — daí `ERR_CONNECTION_REFUSED`. Rodar `streamlit run` **localmente** evita isso; não é necessário configurar Ports no Cursor.
 
 ---
 
@@ -735,6 +799,9 @@ python3 -m pytest tests/ -v
 | Quer zerar histórico acumulado | `python3 -m src.main reset-db` |
 | PowerShell bloqueia ativação | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | Banco vazio no report | Execute `search` antes do `report` |
+| Dashboard: `ERR_CONNECTION_REFUSED` em localhost | Rode `streamlit run src/dashboard/app.py` no **seu PC**, não no workspace remoto |
+| Dashboard vazia | Copie `data/radar.db` do remoto ou rode `run-daily-radar` localmente |
+| `ModuleNotFoundError: streamlit` | `pip install -r requirements.txt` dentro do venv ativo |
 
 ---
 
