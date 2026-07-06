@@ -1,0 +1,55 @@
+# Termos que nunca devem ser detectados como nome de carta
+non_card_terms:
+  - Procuro
+  - Compro
+  - Vendo
+  - Vendendo
+  - Fechando
+  - Buscando
+  - Pago
+  - Preciso
+  - Quero
+  - Alguém
+  - Alguem
+  - Tenho
+  - Desapego
+  - Troco
+  - Aceito
+  - Faço
+  - Faco
+  - Envio
+  - Pokemon
+  - Pokémon
+  - TCG
+  - Copag
+  - Liga
+  - MYP
+  - Cards
+  - Carta
+  - Cartas
+  - Coleção
+  - Colecao
+  - Master
+  - Set
+  - Português
+  - Portugues
+  - Nacional
+  - Inglês
+  - Ingles
+  - Japonês
+  - Japones
+  - NM
+  - LP
+  - MP
+  - HP
+  - DMG
+  - PSA
+  - CGC
+  - BGS
+  - TAG
+  - Falta
+  - À vista
+  - A vista
+  - Gold
+  - Star
+  - Illustrator

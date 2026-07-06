@@ -1,0 +1,18 @@
+# Estatísticas de performance por template (atualizado após cada scan).
+# Chave: profile::template_pattern
+demand_leads::'"compro {card}" "Pokémon TCG"':
+  last_success_rate: 1.0
+  last_saved_count: 3
+  last_rejected_count: 0
+demand_leads::'"procuro {card}" "Pokémon TCG"':
+  last_success_rate: 0.0
+  last_saved_count: 0
+  last_rejected_count: 3
+demand_leads::'"alguém vende {card}" "Pokémon"':
+  last_success_rate: 0.0
+  last_saved_count: 0
+  last_rejected_count: 2
+supply_deals::'"desapego {card}" "Pokémon TCG"':
+  last_success_rate: 1.0
+  last_saved_count: 1
+  last_rejected_count: 0

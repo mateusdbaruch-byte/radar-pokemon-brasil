@@ -1,0 +1,15 @@
+# Ambiente
+.venv/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Dados gerados (mantém placeholder CSV)
+data/radar.db
+
+# IDE
+.idea/
+.vscode/
+*.swp

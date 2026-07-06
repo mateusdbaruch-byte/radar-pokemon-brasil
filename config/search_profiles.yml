@@ -1,0 +1,151 @@
+demand_leads:
+  description: "Busca compradores potenciais procurando cartas."
+  intent_filter:
+    - BUYER_DEMAND
+    - HIGH_INTENT_LEAD
+    - DISCUSSION_SIGNAL
+  strict: true
+  min_confidence: 60
+  buyer_only: true
+  seller_only: false
+  profile_blocked_domains:
+    - amazon.com.br
+    - amazon.com
+  domain_groups:
+    - communities
+    - social_public
+  query_templates:
+    - template: '"compro {card}" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 100
+    - template: '"pago" "{card}" "Pokémon TCG" "carta"'
+      enabled: true
+      priority_weight: 90
+    - template: '"procuro {card}" "carta" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 70
+    - template: '"falta {card}" "coleção" "Pokémon"'
+      enabled: true
+      priority_weight: 65
+    - template: '"fechando coleção" "{card}" "Pokémon"'
+      enabled: true
+      priority_weight: 60
+    - template: '"master set" "{card}" "Pokémon"'
+      enabled: true
+      priority_weight: 60
+    - template: 'site:facebook.com "{card}" "compro" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 55
+    - template: 'site:reddit.com "{card}" "procuro" "Pokémon"'
+      enabled: true
+      priority_weight: 50
+    - template: 'site:instagram.com "{card}" "procuro" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 45
+    - template: 'site:youtube.com "{card}" "procuro" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 40
+    - template: '"alguém vende {card}" "Pokémon"'
+      enabled: true
+      priority_weight: 25
+    - template: '"alguem vende {card}" "Pokemon"'
+      enabled: false
+      priority_weight: 15
+
+supply_deals:
+  description: "Busca vendedores, desapegos e possíveis oportunidades de compra."
+  intent_filter:
+    - SELLER_SUPPLY
+    - URGENT_SALE
+    - UNDERPRICED_LISTING
+    - ARBITRAGE_SIGNAL
+  strict: true
+  min_confidence: 55
+  buyer_only: false
+  seller_only: true
+  domain_groups:
+    - marketplaces
+    - tcg_specialized
+    - social_public
+  query_templates:
+    - template: '"desapego {card}" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 90
+    - template: '"vendo {card}" "Pokémon TCG"'
+      enabled: true
+      priority_weight: 85
+    - template: '"{card}" "abaixo da Liga"'
+      enabled: true
+      priority_weight: 80
+    - template: '"{card}" "menor da Liga"'
+      enabled: true
+      priority_weight: 75
+    - template: 'site:mercadolivre.com.br "{card}" "Pokémon"'
+      enabled: true
+      priority_weight: 70
+    - template: 'site:olx.com.br "{card}" "Pokémon"'
+      enabled: true
+      priority_weight: 70
+    - template: '"{card}" "preço para sair"'
+      enabled: true
+      priority_weight: 65
+    - template: '"{card}" "preciso fazer caixa"'
+      enabled: true
+      priority_weight: 60
+    - template: '"{card}" "aceito proposta" "Pokémon"'
+      enabled: true
+      priority_weight: 55
+    - template: 'site:shopee.com.br "{card}" "Pokémon"'
+      enabled: true
+      priority_weight: 50
+    - template: 'site:enjoei.com.br "{card}" "Pokémon"'
+      enabled: true
+      priority_weight: 45
+    - template: '"{card}" "faço ML"'
+      enabled: true
+      priority_weight: 40
+    - template: '"{card}" "faço OLX"'
+      enabled: true
+      priority_weight: 40
+
+market_reference:
+  description: "Busca referências públicas de preço e oferta."
+  intent_filter:
+    - PRICE_REFERENCE
+    - SELLER_SUPPLY
+    - SUPPLY_SIGNAL
+  strict: false
+  min_confidence: 45
+  buyer_only: false
+  seller_only: false
+  domain_groups:
+    - marketplaces
+    - tcg_specialized
+  query_templates:
+    - template: 'site:ligapokemon.com.br "{card}"'
+      enabled: true
+      priority_weight: 100
+    - template: 'site:mypcards.com "{card}"'
+      enabled: true
+      priority_weight: 95
+    - template: 'site:bigdex.app "{card}"'
+      enabled: true
+      priority_weight: 90
+    - template: 'site:bigdex.app "{card}" pokemon'
+      enabled: true
+      priority_weight: 85
+    - template: 'site:mercadolivre.com.br "{card}" "carta pokemon"'
+      enabled: true
+      priority_weight: 80
+    - template: 'site:olx.com.br "{card}" "pokemon"'
+      enabled: true
+      priority_weight: 75
+    - template: 'site:shopee.com.br "{card}" "pokemon"'
+      enabled: true
+      priority_weight: 70
+    - template: 'site:droper.app "{card}" pokemon'
+      enabled: true
+      priority_weight: 65
+    - template: 'site:enjoei.com.br "{card}" "pokemon"'
+      enabled: true
+      priority_weight: 60

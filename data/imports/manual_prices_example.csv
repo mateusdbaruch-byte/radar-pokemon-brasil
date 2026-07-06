@@ -1,0 +1,4 @@
+source,card_name,price,currency,condition,language,url,seller,collected_at
+liga_pokemon,Charizard,450.00,BRL,near_mint,pt-BR,https://www.ligapokemon.com.br/exemplo-charizard,LojaExemplo,2026-07-01
+myp_cards,Umbreon VMAX,320.50,BRL,mint,pt-BR,https://mypcards.com/exemplo-umbreon,ColetorBR,2026-07-02
+liga_pokemon,Pikachu V,89.90,BRL,good,pt-BR,https://www.ligapokemon.com.br/exemplo-pikachu,,2026-07-03

@@ -1,0 +1,26 @@
+# Fontes habilitadas no MVP
+sources:
+  reddit:
+    enabled: true
+    # Subreddits relevantes para Pokémon TCG no Brasil e internacional
+    subreddits:
+      - PokemonTCG
+      - pkmntcg
+      - PokemonTCGBrasil
+    # Termo extra anexado à busca (opcional)
+    query_suffix: "pokemon card"
+
+  mercado_livre:
+    enabled: true
+    site_id: MLB
+    # Categoria opcional (deixe vazio para busca geral)
+    category: ""
+
+  youtube:
+    enabled: false
+    # Requer YOUTUBE_API_KEY no .env
+    max_comments_per_video: 20
+
+  discord:
+    enabled: false
+    # Apenas placeholder — importação manual ou bot autorizado no futuro

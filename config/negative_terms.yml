@@ -1,0 +1,19 @@
+# Contextos negativos — foco em carta física (TCG Pocket bloqueado por padrão)
+blocked_contexts:
+  - dicionário
+  - significado
+  - sinônimo
+  - música
+  - letra
+  - futebol
+  - notícia esportiva
+  - Pokémon GO
+  - Pokemon GO
+  - TCG Pocket
+  - download
+  - APK
+  - ROM
+  - emulador
+
+# Futuro: habilitar TCG Pocket via ENABLE_TCG_POCKET=true no .env
+enable_tcg_pocket: false

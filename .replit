@@ -1,0 +1,29 @@
+# Radar Pokémon Brasil — configuração Replit
+
+modules = ["python-3.12"]
+
+run = "streamlit run src/dashboard/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true --browser.gatherUsageStats false"
+
+[deployment]
+run = ["sh", "-c", "streamlit run src/dashboard/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true --browser.gatherUsageStats false"]
+deploymentTarget = "cloudrun"
+
+[[ports]]
+localPort = 8501
+externalPort = 80
+
+[env]
+PYTHONPATH = "."
+
+[nix]
+channel = "stable-24_05"
+
+[packager]
+language = "python3"
+
+[packager.features]
+packageSearch = true
+guessImports = true
+
+[unitTest]
+language = "python3"
