@@ -97,7 +97,8 @@ class TestDashboardImports:
     def test_app_module_imports(self):
         from src.dashboard import app as dashboard_app
         assert dashboard_app.PAGES
-        assert "Visão Geral" in dashboard_app.PAGES
+        assert "Início" in dashboard_app.PAGES
+        assert "Configuração" in dashboard_app.PAGES
 
 
 class TestDashboardCommand:
@@ -117,10 +118,7 @@ class TestDashboardCommand:
         assert exc.value.exit_code == 0
         assert len(calls) == 1
         assert calls[0]["cwd"] == str(PROJECT_ROOT)
-        assert calls[0]["cmd"][-4:] == [
-            "--server.port",
-            "8501",
-            "--browser.gatherUsageStats",
-            "false",
-        ]
-        assert str(PROJECT_ROOT / "src" / "dashboard" / "app.py") in calls[0]["cmd"]
+        cmd = calls[0]["cmd"]
+        assert str(PROJECT_ROOT / "src" / "dashboard" / "app.py") in cmd
+        assert cmd[cmd.index("--server.port") + 1] == "8501"
+        assert cmd[cmd.index("--server.address") + 1] == "localhost"

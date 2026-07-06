@@ -5,6 +5,28 @@ Detecta compradores potenciais, sinais públicos na web e leads opt-in — dentr
 
 ---
 
+## Como usar sem programar
+
+Ideal para quem não quer terminal, port forwarding ou instalação local.
+
+1. **Hospede no Replit** — siga o guia [DEPLOY_REPLIT.md](DEPLOY_REPLIT.md) (importar do GitHub, configurar Secrets, clicar Run).
+2. **Abra o link** do app no navegador (ex.: `https://seu-app.replit.app`).
+3. Na página **Início**, clique em **Rodar Radar Manualmente** e aguarde o scan.
+4. Clique em **Ver oportunidades** → revise a **Opportunity Inbox** (links e evidências).
+5. Use **Card Radar** para ver demanda, oferta e referência por carta.
+6. Confira **Orçamento** e **Query Performance** para entender o consumo da SerpAPI.
+
+> A dashboard **não** gasta SerpAPI ao abrir — só quando você clica em Rodar Radar.  
+> Configure `SERPAPI_KEY` nos Secrets do Replit antes do primeiro scan.
+
+**Comando para hospedagem (Replit / nuvem):**
+
+```bash
+python -m src.main webapp
+```
+
+---
+
 ## Fluxo principal (Opportunity Radar)
 
 ### Teste rápido (uma query)
@@ -170,7 +192,8 @@ Comandos de revisão:
 | `profiles-summary` | Lista perfis, templates e filtros |
 | `next-run-plan` | Plano de execução antes de consumir SerpAPI |
 | `run-daily-radar` | Execução incremental diária (preserva histórico) |
-| `dashboard` | Abre dashboard Streamlit local (somente leitura) |
+| `dashboard` | Abre dashboard Streamlit local (`localhost`) |
+| `webapp` | Inicia dashboard para hospedagem (Replit — `0.0.0.0:8501`) |
 | `query-template-report` | Performance por template de query |
 | `stale-opportunities-report` | Oportunidades antigas ou freshness unknown |
 | `run-all-profiles` | Executa os 3 perfis de uma vez (teste/batch) |
@@ -292,7 +315,7 @@ No **Windows**, use `py -3` no lugar de `python3` se necessário, e ative com `.
 
 ## Rodar dashboard localmente
 
-A dashboard é **somente leitura**: ela abre o SQLite em `data/radar.db` e **não chama SerpAPI** ao iniciar. Use-a no seu PC — não depende de workspace remoto nem do painel Ports/Forwarded Ports do Cursor.
+A dashboard lê `data/radar.db` e **não chama SerpAPI ao abrir** — só ao clicar em **Rodar Radar Manualmente**. Para uso sem instalação, prefira o [DEPLOY_REPLIT.md](DEPLOY_REPLIT.md).
 
 ### 1. Ter o projeto na sua máquina
 
@@ -353,9 +376,9 @@ O navegador deve abrir em **http://localhost:8501**. Para encerrar: `Ctrl+C` no 
 
 Se `data/radar.db` estiver vazio, a dashboard mostra sugestões de comandos para popular o banco (isso é só texto na tela — ainda sem chamar SerpAPI).
 
-### 4. Popular dados (opcional, fora da dashboard)
+### 4. Popular dados (opcional)
 
-A dashboard **não** executa buscas. Para gerar oportunidades no SQLite local:
+Na página **Início** da dashboard, clique em **Rodar Radar Manualmente** (requer `SERPAPI_KEY`). Ou pelo terminal:
 
 ```bash
 # configure .env com SERPAPI_KEY (só para estes comandos, não para a dashboard)

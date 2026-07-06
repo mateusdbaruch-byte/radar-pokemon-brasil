@@ -108,14 +108,11 @@ def metric_row(items: list[tuple[str, str | int, str | None]]) -> None:
 
 
 def empty_state(message: str | None = None) -> None:
-    msg = message or "Sem dados ainda. Rode o agente primeiro pelo terminal."
+    msg = message or "Sem dados ainda. Vá em **Início** e clique em **Rodar Radar Manualmente**."
     st.markdown(
         f"""<div class="empty-state">
         <p><strong>{msg}</strong></p>
-        <p style="margin-top:1rem;text-align:left;display:inline-block;">
-        <code>python -m src.main next-run-plan --cards Charizard,Umbreon,Mew --daily-budget 20 --budget-mode economy</code><br><br>
-        <code>python -m src.main run-daily-radar --cards Charizard,Umbreon,Mew --daily-budget 20 --budget-mode economy</code>
-        </p></div>""",
+        </div>""",
         unsafe_allow_html=True,
     )
 

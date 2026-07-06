@@ -1323,11 +1323,13 @@ def opportunity_report_cmd() -> None:
     display_opportunity_report(console)
 
 
-@app.command("dashboard")
-def dashboard_cmd(
-    port: int = typer.Option(8501, "--port", "-p", help="Porta do servidor Streamlit"),
-) -> None:
-    """Abre a dashboard visual local (Streamlit, somente leitura)."""
+def _start_streamlit_server(
+  port: int = 8501,
+  *,
+  address: str = "localhost",
+  headless: bool = False,
+) -> int:
+    """Inicia o servidor Streamlit da dashboard."""
     import subprocess
     import sys
 
@@ -1336,24 +1338,53 @@ def dashboard_cmd(
         console.print(f"[red]Dashboard não encontrada: {app_path}[/red]")
         raise typer.Exit(1)
 
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--server.address",
+        address,
+        "--browser.gatherUsageStats",
+        "false",
+    ]
+    if headless or address == "0.0.0.0":
+        cmd.extend(["--server.headless", "true"])
+
+    return subprocess.call(cmd, cwd=str(PROJECT_ROOT))
+
+
+@app.command("dashboard")
+def dashboard_cmd(
+    port: int = typer.Option(8501, "--port", "-p", help="Porta do servidor Streamlit"),
+) -> None:
+    """Abre a dashboard visual no navegador (uso local)."""
     console.print(
         f"[bold blue]🇧🇷 Radar Pokémon Brasil — Dashboard[/bold blue]\n"
-        f"[dim]http://localhost:{port} | somente leitura | Ctrl+C para encerrar[/dim]\n"
+        f"[dim]http://localhost:{port} | Ctrl+C para encerrar[/dim]\n"
     )
-    code = subprocess.call(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            str(app_path),
-            "--server.port",
-            str(port),
-            "--browser.gatherUsageStats",
-            "false",
-        ],
-        cwd=str(PROJECT_ROOT),
+    code = _start_streamlit_server(port=port, address="localhost")
+    raise typer.Exit(code)
+
+
+@app.command("webapp")
+def webapp_cmd(
+    port: int = typer.Option(8501, "--port", "-p", help="Porta do servidor Streamlit"),
+    host: str = typer.Option(
+        "0.0.0.0",
+        "--host",
+        help="Endereço de escuta (0.0.0.0 para Replit/hospedagem)",
+    ),
+) -> None:
+    """Inicia a dashboard Streamlit como webapp (Replit, hospedagem na nuvem)."""
+    console.print(
+        f"[bold blue]🇧🇷 Radar Pokémon Brasil — Webapp[/bold blue]\n"
+        f"[dim]http://{host}:{port} | hospedagem | Ctrl+C para encerrar[/dim]\n"
     )
+    code = _start_streamlit_server(port=port, address=host, headless=True)
     raise typer.Exit(code)
 
 

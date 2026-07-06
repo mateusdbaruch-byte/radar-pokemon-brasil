@@ -1,11 +1,11 @@
-"""Dashboard local Streamlit — Radar Pokémon Brasil (read-only)."""
+"""Dashboard Streamlit — Radar Pokémon Brasil (webapp + leitura SQLite)."""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from src.dashboard import charts, components, data
+from src.dashboard import actions, charts, components, config_info, data
 
 st.set_page_config(
     page_title="Radar Pokémon Brasil",
@@ -15,6 +15,7 @@ st.set_page_config(
 )
 
 PAGES = [
+    "Início",
     "Visão Geral",
     "Opportunity Inbox",
     "Card Radar",
@@ -23,7 +24,144 @@ PAGES = [
     "Orçamento",
     "Saúde das Fontes",
     "Execuções",
+    "Configuração",
 ]
+
+NAV_TARGETS = {
+    "oportunidades": "Opportunity Inbox",
+    "card_radar": "Card Radar",
+    "orcamento": "Orçamento",
+    "performance": "Query Performance",
+}
+
+
+def navigate_to(page: str) -> None:
+    st.session_state.nav_page = page
+    st.rerun()
+
+
+def render_serpapi_banner() -> None:
+    if not actions.serpapi_configured():
+        st.warning(
+            "⚠️ **SerpAPI não configurada.** O botão *Rodar Radar* não funcionará até você "
+            "adicionar `SERPAPI_KEY` nos Secrets (Replit) ou no `.env` local. "
+            "Abra **Configuração** para mais detalhes."
+        )
+
+
+def render_radar_result(result: dict) -> None:
+    if not result.get("ok"):
+        st.error(result.get("error", "Erro desconhecido ao rodar o radar."))
+        return
+
+    if result.get("budget_stopped"):
+        st.warning(result.get("message", "Orçamento diário atingido."))
+    else:
+        st.success(result.get("message", "Scan concluído."))
+
+    components.metric_row([
+        ("Queries executadas", result.get("queries_executed", 0), None),
+        ("Salvos", result.get("saved", 0), None),
+        ("Mesclados", result.get("merged", 0), None),
+        ("Rejeitados", result.get("rejected", 0), None),
+    ])
+    st.caption(f"Scan run: `{result.get('scan_run_id', '')[:8]}…`")
+
+
+def render_home() -> None:
+    components.page_header(
+        "Início",
+        "Painel simples — clique nos botões abaixo, sem precisar de terminal",
+    )
+    render_serpapi_banner()
+
+    if data.has_any_data():
+        m = data.overview_metrics()
+        components.metric_row([
+            ("Oportunidades", m["total"], None),
+            ("Últimos 7 dias", m["last_7_days"], None),
+            ("Live", m["live"], None),
+        ])
+    else:
+        st.info(
+            "Ainda não há dados no banco. Configure a SerpAPI (se necessário) e clique em "
+            "**Rodar Radar Manualmente** abaixo."
+        )
+
+    components.section_title("Navegação rápida")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("📥 Ver oportunidades", use_container_width=True, type="secondary"):
+            navigate_to(NAV_TARGETS["oportunidades"])
+        if st.button("📊 Ver Orçamento", use_container_width=True, type="secondary"):
+            navigate_to(NAV_TARGETS["orcamento"])
+    with c2:
+        if st.button("🎯 Ver Card Radar", use_container_width=True, type="secondary"):
+            navigate_to(NAV_TARGETS["card_radar"])
+        if st.button("📈 Ver Performance das Queries", use_container_width=True, type="secondary"):
+            navigate_to(NAV_TARGETS["performance"])
+
+    components.section_title("Rodar Radar Manualmente")
+    st.caption(
+        "Equivalente a: "
+        "`python -m src.main run-daily-radar --cards Charizard,Umbreon,Mew "
+        "--daily-budget 20 --budget-mode economy`"
+    )
+
+    if st.button("🔄 Rodar Radar Manualmente", type="primary", use_container_width=True):
+        if not actions.serpapi_configured():
+            st.session_state.last_radar_result = {
+                "ok": False,
+                "error": (
+                    "SerpAPI não configurada. Adicione SERPAPI_KEY nos Secrets "
+                    "do Replit antes de rodar o radar."
+                ),
+            }
+        else:
+            with st.spinner("Executando radar… isso pode levar alguns minutos. Aguarde."):
+                st.session_state.last_radar_result = actions.run_manual_daily_radar()
+        st.rerun()
+
+    if st.session_state.get("last_radar_result"):
+        render_radar_result(st.session_state.last_radar_result)
+
+
+def render_config() -> None:
+    components.page_header("Configuração", "Status do ambiente e parâmetros do radar")
+    cfg = config_info.app_config_summary()
+
+    if cfg["serpapi_configured"]:
+        st.success("✅ SerpAPI configurada (`SERPAPI_KEY` encontrada no ambiente).")
+    else:
+        st.error(
+            "❌ SerpAPI **não** configurada. No Replit: aba **Secrets** → adicione "
+            "`SERPAPI_KEY` com sua chave. Localmente: copie `.env.example` para `.env`."
+        )
+
+    components.metric_row([
+        ("Orçamento diário", cfg["daily_budget"], "SERPAPI_DAILY_BUDGET"),
+        ("Orçamento mensal", cfg["monthly_budget"], "SERPAPI_MONTHLY_BUDGET"),
+        ("Provedor busca", cfg["web_search_provider"], "WEB_SEARCH_PROVIDER"),
+    ])
+
+    components.section_title("Cartas monitoradas")
+    st.caption(f"Arquivo: `{cfg['watchlist_path']}`")
+    if cfg["watched_cards"]:
+        rows = pd.DataFrame(cfg["watched_cards"], columns=["carta", "prioridade"])
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma carta em `config/watchlist.yml`.")
+
+    components.section_title("Perfis de busca")
+    for profile in cfg["profiles"]:
+        with st.expander(f"`{profile['id']}` — {profile['label']}", expanded=False):
+            st.markdown(profile["description"])
+
+    st.divider()
+    st.markdown(
+        "**Segurança:** nunca coloque a chave SerpAPI no código ou no GitHub. "
+        "Use apenas Secrets / variáveis de ambiente."
+    )
 
 
 def render_overview() -> None:
@@ -366,15 +504,29 @@ def main() -> None:
     components.apply_theme()
     components.app_branding()
 
-    page = st.sidebar.radio("Navegação", PAGES, label_visibility="collapsed")
-    st.sidebar.caption("Modo somente leitura — execuções via CLI.")
+    if "nav_page" not in st.session_state:
+        st.session_state.nav_page = PAGES[0]
 
-    if not data.database_exists():
+    page = st.sidebar.radio(
+        "Navegação",
+        PAGES,
+        index=PAGES.index(st.session_state.nav_page) if st.session_state.nav_page in PAGES else 0,
+        label_visibility="collapsed",
+    )
+    st.session_state.nav_page = page
+    st.sidebar.caption("SQLite local · radar manual sob demanda")
+    if not actions.serpapi_configured():
+        st.sidebar.warning("SerpAPI não configurada")
+
+    if not data.database_exists() and page not in ("Início", "Configuração"):
         components.page_header("Radar Pokémon Brasil", "Inteligência de oportunidades para Pokémon TCG no Brasil")
-        components.empty_state("Banco SQLite não encontrado. Rode o agente para criar data/radar.db.")
+        components.empty_state(
+            "Banco SQLite não encontrado. Vá em **Início** e clique em **Rodar Radar Manualmente**."
+        )
         return
 
     renderers = {
+        "Início": render_home,
         "Visão Geral": render_overview,
         "Opportunity Inbox": render_inbox,
         "Card Radar": render_card_radar,
@@ -383,6 +535,7 @@ def main() -> None:
         "Orçamento": render_budget,
         "Saúde das Fontes": render_health,
         "Execuções": render_scan_runs,
+        "Configuração": render_config,
     }
     renderers[page]()
 
